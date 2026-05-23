@@ -1,0 +1,7 @@
+services:
+  chesslens:
+    build: .
+    env_file: .env
+    volumes:
+      - ~/.chesslens:/root/.chesslens
+      - ./reports:/app/reports
