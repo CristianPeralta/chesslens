@@ -23,6 +23,18 @@ chesslens game --last                       # last game analysis (HTML)
 chesslens opening "French Defense"          # opening breakdown (HTML)
 ```
 
+## Usage with Docker
+
+No need to install Python or Stockfish manually:
+
+```bash
+cp .env.example .env
+docker compose run --rm chesslens config --username your_username
+docker compose run --rm chesslens report
+```
+
+> **Linux note:** if `docker compose build` fails resolving apt repos, run `docker compose build --no-cache` with `network_mode: host` in the compose file, or configure Docker daemon DNS: add `{"dns": ["8.8.8.8"]}` to `/etc/docker/daemon.json` and restart Docker.
+
 ## Docs
 
 See [docs/index.md](./docs/index.md) for full documentation.

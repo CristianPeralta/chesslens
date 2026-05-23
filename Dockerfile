@@ -1,0 +1,24 @@
+FROM python:3.11-slim-bookworm
+
+# Install Stockfish — the only system dependency
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    stockfish \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Install dependencies before copying source — better layer caching
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project
+
+# Copy source and install project
+COPY src/ ./src/
+COPY README.md ./
+RUN uv sync --frozen
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+ENTRYPOINT ["chesslens"]

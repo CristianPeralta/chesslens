@@ -1,7 +1,9 @@
 services:
   chesslens:
     build: .
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     volumes:
-      - ~/.chesslens:/root/.chesslens
-      - ./reports:/app/reports
+      - ${HOME}/.chesslens:/root/.chesslens  # config and DB persistence
+      - ./reports:/app/reports               # generated HTML reports
