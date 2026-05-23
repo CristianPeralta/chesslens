@@ -1,6 +1,7 @@
 services:
   chesslens:
     build: .
+    image: chesslens
     env_file:
       - path: .env
         required: false
