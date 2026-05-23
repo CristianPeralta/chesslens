@@ -1,0 +1,61 @@
+{
+  "games": [
+    {
+      "url": "https://www.chess.com/game/live/111111111",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.05.10\"]\n[White \"krix0s\"]\n[Black \"opponent1\"]\n[Result \"1-0\"]\n[WhiteElo \"1245\"]\n[BlackElo \"1230\"]\n[TimeControl \"180+2\"]\n[Termination \"krix0s won by resignation\"]\n[ECO \"D00\"]\n[ECOUrl \"https://www.chess.com/openings/Queens-Pawn-Opening-London-System\"]\n\n1. d4 d5 2. Bf4 Nf6 3. e3 1-0",
+      "time_control": "180+2",
+      "end_time": 1746835200,
+      "rated": true,
+      "time_class": "blitz",
+      "rules": "chess",
+      "white": {
+        "rating": 1245,
+        "result": "win",
+        "username": "krix0s"
+      },
+      "black": {
+        "rating": 1230,
+        "result": "resigned",
+        "username": "opponent1"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/222222222",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.05.11\"]\n[White \"opponent2\"]\n[Black \"krix0s\"]\n[Result \"0-1\"]\n[WhiteElo \"1260\"]\n[BlackElo \"1248\"]\n[TimeControl \"180+2\"]\n[Termination \"krix0s won by resignation\"]\n[ECO \"C02\"]\n[ECOUrl \"https://www.chess.com/openings/French-Defense-Advance-Variation\"]\n\n1. e4 e6 2. d4 d5 3. e5 0-1",
+      "time_control": "180+2",
+      "end_time": 1746921600,
+      "rated": true,
+      "time_class": "blitz",
+      "rules": "chess",
+      "white": {
+        "rating": 1260,
+        "result": "resigned",
+        "username": "opponent2"
+      },
+      "black": {
+        "rating": 1248,
+        "result": "win",
+        "username": "krix0s"
+      }
+    },
+    {
+      "url": "https://www.chess.com/game/live/333333333",
+      "pgn": "[Event \"Live Chess\"]\n[Site \"Chess.com\"]\n[Date \"2026.05.12\"]\n[White \"krix0s\"]\n[Black \"opponent3\"]\n[Result \"0-1\"]\n[WhiteElo \"1251\"]\n[BlackElo \"1270\"]\n[TimeControl \"600\"]\n[Termination \"opponent3 won on time\"]\n\n1. e4 e5 0-1",
+      "time_control": "600",
+      "end_time": 1747008000,
+      "rated": true,
+      "time_class": "rapid",
+      "rules": "chess",
+      "white": {
+        "rating": 1251,
+        "result": "timeout",
+        "username": "krix0s"
+      },
+      "black": {
+        "rating": 1270,
+        "result": "win",
+        "username": "opponent3"
+      }
+    }
+  ]
+}
