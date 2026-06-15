@@ -10,8 +10,9 @@ chess.com tiene 150M+ usuarios registrados. El analisis de partidas con motor (e
 
 ## Diferenciacion
 
-- **Wrapped mensual gratuito** — ningun servicio gratis genera un resumen narrativo tipo "este mes perdiste 5 partidas por timeout en el movimiento 18-22, eso te costo ~30 puntos de rating"
-- **Puente diagnostico - estudio** — no solo estadisticas, sino "esta semana estudiá esta linea especifica en Lichess Practice"
+- **Entrenador personal automatizado** — no solo estadisticas: detecta tus patrones reales de error, variantes donde siempre caes, fortalezas que reforzar, y genera un roadmap de mejora personalizado con plan de estudio especifico
+- **Viaje en el tiempo** — el diferenciador central. Desde una partida perdida, Chess Lens te lleva de vuelta al movimiento exacto donde fallaste. Reproducis desde ahi con el tiempo de reloj que te quedaba, o sin presion, con hints progresivos via Stockfish o las mejores jugadas directo. Ningun competidor tiene esto (2026-06-15)
+- **Puente diagnostico - estudio** — no "mejora tus finales" sino "esta semana estudia esta linea especifica en Lichess Practice"
 - **AI-agnostico** — funciona con Claude, GPT-4, Gemini, o Ollama local (gratis). El tier gratuito puede usar Ollama.
 - **Futuro: analisis ajustado al nivel del rival** — integracion con Maia (modelo entrenado con partidas humanas por ELO), no solo Stockfish que asume juego perfecto
 
