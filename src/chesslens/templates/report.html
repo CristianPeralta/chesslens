@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+
+{% block title %}chesslens — {{ username }} — {{ month }}{% endblock %}
+
+{% block head %}
+<style>
+  .header-meta { color: #a0a0a0; font-size: 0.95rem; margin-top: 0.4rem; }
+  .header-rating { font-size: 2.5rem; font-weight: 700; }
+  .rating-delta { font-size: 1rem; font-weight: 500; margin-left: 0.5rem; }
+  .delta-up   { color: #4ade80; }
+  .delta-down { color: #f87171; }
+  .delta-flat { color: #a0a0a0; }
+
+  .narrative {
+    line-height: 1.7;
+    white-space: pre-wrap;
+    color: #d0d0d0;
+    font-size: 0.97rem;
+  }
+
+  .pain-card {
+    border-left: 4px solid #fbbf24;
+    background: #1f1a0f;
+    border-radius: 0 12px 12px 0;
+  }
+  .pain-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #fbbf24;
+    margin-bottom: 0.4rem;
+  }
+
+  .recommendations ol {
+    padding-left: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .recommendations li { line-height: 1.5; color: #d0d0d0; }
+
+  .chart-wrap { position: relative; height: 220px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="card" style="margin-bottom: 2rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem;">
+    <div>
+      <h1>♟ {{ username }}</h1>
+      <div class="header-meta">Monthly report — {{ month }}</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="header-rating">
+        {{ report.avg_accuracy | round(0) | int }}%
+        <span style="font-size:1rem; color:#a0a0a0; font-weight:400;">accuracy</span>
+      </div>
+      <div class="header-meta">
+        {{ report.total_games }} games &nbsp;·&nbsp;
+        <span style="color:#4ade80;">{{ report.wins }}W</span>
+        <span style="color:#a0a0a0;"> {{ report.draws }}D</span>
+        <span style="color:#f87171;"> {{ report.losses }}L</span>
+        &nbsp;·&nbsp; {{ (report.win_rate * 100) | round(0) | int }}% win rate
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Narrative -->
+<div class="card">
+  <h2>Month Summary</h2>
+  <div class="narrative">{{ narrative }}</div>
+</div>
+
+<!-- Charts row -->
+<div class="grid-2">
+  <!-- Rating over time -->
+  <div class="card">
+    <h2>Rating by week</h2>
+    <div class="chart-wrap">
+      <canvas id="ratingChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Win rate by color -->
+  <div class="card">
+    <h2>Win rate by color</h2>
+    <div class="chart-wrap">
+      <canvas id="colorChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Top openings -->
+<div class="card">
+  <h2>Top openings</h2>
+  <div class="chart-wrap" style="height:200px;">
+    <canvas id="openingChart"></canvas>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="grid-2">
+  <!-- Key stats -->
+  <div class="card">
+    <h2>Key stats</h2>
+    <div class="stat-row">
+      <span class="stat-label">As White</span>
+      <span class="stat-value">{{ (report.as_white.win_rate * 100) | round(0) | int }}% win rate</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">As Black</span>
+      <span class="stat-value">{{ (report.as_black.win_rate * 100) | round(0) | int }}% win rate</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Avg centipawn loss</span>
+      <span class="stat-value">{{ report.avg_centipawn_loss if report.avg_centipawn_loss else "N/A" }}</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Blunders/game</span>
+      <span class="stat-value">{{ report.blunders_per_game if report.blunders_per_game else "N/A" }}</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Timeouts</span>
+      <span class="stat-value">{{ report.timeout_count }} ({{ (report.timeout_rate * 100) | round(0) | int }}%)</span>
+    </div>
+  </div>
+
+  <!-- Main pain -->
+  <div class="card pain-card">
+    <div class="pain-label">Main pattern this month</div>
+    <div style="font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; text-transform:capitalize;">
+      {{ report.main_pain }}
+    </div>
+    {% if report.worst_opening %}
+    <div style="color:#a0a0a0; font-size:0.9rem;">
+      Worst opening: <strong style="color:#e8e8e8;">{{ report.worst_opening.name }}</strong>
+      — {{ (report.worst_opening.win_rate * 100) | round(0) | int }}% win in {{ report.worst_opening.games }} games
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+const chartDefaults = {
+  color: "#a0a0a0",
+  borderColor: "#2a2a2a",
+};
+Chart.defaults.color = chartDefaults.color;
+
+// Rating by week
+new Chart(document.getElementById("ratingChart"), {
+  type: "line",
+  data: {
+    labels: {{ weekly_labels | tojson }},
+    datasets: [{
+      label: "Rating",
+      data: {{ weekly_ratings | tojson }},
+      borderColor: "#60a5fa",
+      backgroundColor: "rgba(96,165,250,0.1)",
+      tension: 0.3,
+      fill: true,
+      pointRadius: 4,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: "#2a2a2a" } },
+      y: { grid: { color: "#2a2a2a" } }
+    }
+  }
+});
+
+// Win rate by color — donut
+new Chart(document.getElementById("colorChart"), {
+  type: "doughnut",
+  data: {
+    labels: ["White wins", "White draws", "White losses", "Black wins", "Black draws", "Black losses"],
+    datasets: [{
+      data: [
+        {{ report.as_white.wins }}, {{ report.as_white.draws }}, {{ report.as_white.losses }},
+        {{ report.as_black.wins }}, {{ report.as_black.draws }}, {{ report.as_black.losses }},
+      ],
+      backgroundColor: [
+        "#4ade80","#a0a0a0","#f87171",
+        "#22d3ee","#6b7280","#fb923c",
+      ],
+      borderWidth: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: "bottom", labels: { boxWidth: 12, padding: 8 } } }
+  }
+});
+
+// Top openings — horizontal bar
+new Chart(document.getElementById("openingChart"), {
+  type: "bar",
+  data: {
+    labels: {{ opening_names | tojson }},
+    datasets: [{
+      label: "Win rate %",
+      data: {{ opening_winrates | tojson }},
+      backgroundColor: {{ opening_colors | tojson }},
+      borderRadius: 4,
+    }]
+  },
+  options: {
+    indexAxis: "y",
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { min: 0, max: 100, grid: { color: "#2a2a2a" }, ticks: { callback: v => v + "%" } },
+      y: { grid: { display: false } }
+    }
+  }
+});
+</script>
+{% endblock %}
