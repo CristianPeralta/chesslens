@@ -99,8 +99,9 @@ def test_analyze_game_timeout_move_set(timeout_game):
     mock_engine.__enter__ = lambda s: s
     mock_engine.__exit__ = MagicMock(return_value=False)
 
-    with patch("chess.engine.SimpleEngine.popen_uci", return_value=mock_engine):
-        result = analyze_game(timeout_game)
+    with patch("chesslens.core.analyzer._find_stockfish", return_value="/usr/bin/stockfish"):
+        with patch("chess.engine.SimpleEngine.popen_uci", return_value=mock_engine):
+            result = analyze_game(timeout_game)
 
     assert result is not None
     assert result.timeout_move == timeout_game.move_count
@@ -116,8 +117,9 @@ def test_analyze_game_no_timeout_move(blitz_game):
     mock_engine.__enter__ = lambda s: s
     mock_engine.__exit__ = MagicMock(return_value=False)
 
-    with patch("chess.engine.SimpleEngine.popen_uci", return_value=mock_engine):
-        result = analyze_game(blitz_game)
+    with patch("chesslens.core.analyzer._find_stockfish", return_value="/usr/bin/stockfish"):
+        with patch("chess.engine.SimpleEngine.popen_uci", return_value=mock_engine):
+            result = analyze_game(blitz_game)
 
     assert result is not None
     assert result.timeout_move is None
