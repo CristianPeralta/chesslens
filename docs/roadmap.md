@@ -5,11 +5,11 @@
 **Objetivo:** Herramienta personal que genera reportes reales con datos reales.
 
 ### Core
-- [ ] Project scaffolding — pyproject.toml, estructura de carpetas, Typer skeleton
-- [ ] chess.com API fetcher — `core/fetcher.py`
-- [ ] PGN parser — `core/parser.py` con python-chess
-- [ ] Stockfish analyzer — `core/analyzer.py` (accuracy, centipawn loss, timeout detection)
-- [ ] Statistical pattern extractor — `core/patterns.py` (win rate, aperturas, tiempo)
+- [x] Project scaffolding — pyproject.toml, estructura de carpetas, Typer skeleton
+- [x] chess.com API fetcher — `core/fetcher.py`
+- [x] PGN parser — `core/parser.py` con python-chess
+- [x] Stockfish analyzer — `core/analyzer.py` (accuracy, centipawn loss, timeout detection)
+- [x] Statistical pattern extractor — `core/patterns.py` (win rate, aperturas, tiempo)
 - [ ] LiteLLM narrative generator — `core/reporter.py`
 - [ ] SQLite persistence — `db/models.py` + `db/session.py`
 

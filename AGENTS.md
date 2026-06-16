@@ -1,7 +1,9 @@
 # chesslens
 
-Personal chess analysis tool with monthly Wrapped-style reports.
-Connects to chess.com API, analyzes your games with Stockfish, and generates narrative insights via LLM.
+Automated personal chess coach — the coach you can't afford to pay.
+Analyzes your chess.com games with Stockfish, detects real error patterns, and generates a monthly improvement roadmap with actionable study recommendations.
+
+Core differentiator: **time-travel replay** — go back to the exact move where you lost, replay from there with your remaining clock time (or without pressure), with progressive Stockfish hints. No competitor has this (verified 2026-06-15).
 
 See [docs/index.md](./docs/index.md) for complete documentation.
 
@@ -209,12 +211,15 @@ CHESSLENS_MODEL=ollama/llama3        # Local, free
 - 4 CLI commands: config, stats, report, game, opening
 - SQLite persistence
 
-**Phase 2 — Multi-usuario:**
+**Phase 2 — Multi-usuario + time-travel replay:**
 - FastAPI web delivery (same core)
 - PostgreSQL, JWT auth, background jobs
+- Time-travel replay UI (Stockfish.js WASM, interactive board, real clock pressure)
 
 **Phase 3 — Producto de pago:**
-- Stripe, Maia model integration, Ollama free tier, web dashboard
+- Stripe, freemium with Ollama free tier ($3-5/month for Claude/GPT-4)
+- Maia model integration (analysis calibrated to opponent ELO, not perfect play)
+- Web dashboard frontend
 
 **Out of scope:**
 - Multi-tenant in Phase 1
