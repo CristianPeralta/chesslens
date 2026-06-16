@@ -14,7 +14,7 @@ import chess
 import chess.engine
 import chess.pgn
 
-from chesslens.core.parser import Game
+from chesslens.core.parser import Game, extract_clock
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,31 @@ class GameAnalysis:
     mistakes: int
     inaccuracies: int
     timeout_move: int | None  # ply count at timeout, None otherwise
+
+
+@dataclass
+class MoveError:
+    ply: int
+    san: str
+    eval_before: int
+    eval_after: int
+    centipawn_loss: int
+    best_line: list[str]
+    severity: str
+
+
+@dataclass
+class GameDetailAnalysis:
+    game_id: str
+    eval_sequence: list[int]
+    top_errors: list[MoveError]
+    remaining_clock: int | None
+    accuracy: float
+    avg_centipawn_loss: float
+    blunders: int
+    mistakes: int
+    inaccuracies: int
+    timeout_move: int | None
 
 
 def _find_stockfish(path: str | None = None) -> str:
@@ -108,6 +133,143 @@ def analyze_game(
 
     return GameAnalysis(
         game_id=game.id,
+        accuracy=_accuracy(avg_cpl),
+        avg_centipawn_loss=round(avg_cpl, 1),
+        blunders=blunders,
+        mistakes=mistakes,
+        inaccuracies=inaccuracies,
+        timeout_move=game.move_count if game.end_reason == "timeout" else None,
+    )
+
+
+def _severity(cpl: int) -> str:
+    if cpl >= 200:
+        return "blunder"
+    if cpl >= 100:
+        return "mistake"
+    return "inaccuracy"
+
+
+def _best_line_san(info: dict, board_before_move: chess.Board) -> list[str]:
+    """Convert the principal variation from info into SAN notation (first 5 moves)."""
+    pv = info.get("pv", [])[:5]
+    board = board_before_move.copy()
+    san_moves: list[str] = []
+    for move in pv:
+        try:
+            san_moves.append(board.san(move))
+            board.push(move)
+        except Exception:
+            break
+    return san_moves
+
+
+def analyze_game_detail(
+    game: Game,
+    engine_path: str | None = None,
+    depth: int = DEFAULT_DEPTH,
+) -> GameDetailAnalysis | None:
+    """Deep analysis of a single game: eval sequence, top errors, remaining clock.
+
+    Uses ONE engine session with multipv=3 to collect both eval and best lines.
+    Returns None on any failure (engine not found, PGN error, etc.).
+    """
+    try:
+        stockfish_path = _find_stockfish(engine_path)
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        return None
+
+    pgn_game = chess.pgn.read_game(io.StringIO(game.pgn))
+    if pgn_game is None:
+        logger.warning("Could not parse PGN for game %s", game.id)
+        return None
+
+    player_color = chess.WHITE if game.color == "white" else chess.BLACK
+    limit = chess.engine.Limit(depth=depth)
+
+    eval_sequence: list[int] = []
+    player_errors: list[MoveError] = []
+    losses: list[float] = []
+    blunders = mistakes = inaccuracies = 0
+    remaining_clock: int | None = None
+    last_player_node = None
+
+    try:
+        with chess.engine.SimpleEngine.popen_uci(stockfish_path) as engine:
+            board = pgn_game.board()
+
+            # Initial position eval (before any moves)
+            pre_infos = engine.analyse(board, limit, multipv=3)
+            prev_infos = pre_infos if isinstance(pre_infos, list) else [pre_infos]
+
+            for node in pgn_game.mainline():
+                mover = board.turn
+                board_before = board.copy()
+
+                if mover == player_color:
+                    last_player_node = node
+
+                board.push(node.move)
+                curr_infos = engine.analyse(board, limit, multipv=3)
+                if not isinstance(curr_infos, list):
+                    curr_infos = [curr_infos]
+
+                # Build eval sequence from white's perspective, clamped ±1000
+                raw_score = curr_infos[0]["score"].white().score(mate_score=10000)
+                if raw_score is not None:
+                    eval_sequence.append(max(-1000, min(1000, raw_score)))
+
+                # Collect player move errors
+                if mover == player_color and prev_infos:
+                    before_raw = prev_infos[0]["score"].white().score(mate_score=10000)
+                    after_raw = curr_infos[0]["score"].white().score(mate_score=10000)
+
+                    if before_raw is not None and after_raw is not None:
+                        if player_color == chess.WHITE:
+                            cpl = max(0, before_raw - after_raw)
+                        else:
+                            cpl = max(0, after_raw - before_raw)
+
+                        loss = float(cpl)
+                        losses.append(loss)
+                        if loss >= BLUNDER_THRESHOLD:
+                            blunders += 1
+                        elif loss >= MISTAKE_THRESHOLD:
+                            mistakes += 1
+                        elif loss >= INACCURACY_THRESHOLD:
+                            inaccuracies += 1
+
+                        if cpl >= INACCURACY_THRESHOLD:
+                            best_line = _best_line_san(prev_infos[0], board_before)
+                            player_errors.append(MoveError(
+                                ply=board.ply() - 1,
+                                san=board_before.san(node.move),
+                                eval_before=max(-1000, min(1000, before_raw)),
+                                eval_after=max(-1000, min(1000, after_raw)),
+                                centipawn_loss=cpl,
+                                best_line=best_line,
+                                severity=_severity(cpl),
+                            ))
+
+                prev_infos = curr_infos
+
+    except Exception as e:
+        logger.warning("Stockfish detail analysis failed for game %s: %s", game.id, e)
+        return None
+
+    # Extract remaining clock from last player move's comment
+    if last_player_node is not None:
+        remaining_clock = extract_clock(last_player_node.comment)
+
+    top_errors = sorted(player_errors, key=lambda e: e.centipawn_loss, reverse=True)[:3]
+    avg_cpl = sum(losses) / len(losses) if losses else 0.0
+
+    return GameDetailAnalysis(
+        game_id=game.id,
+        eval_sequence=eval_sequence,
+        top_errors=top_errors,
+        remaining_clock=remaining_clock,
         accuracy=_accuracy(avg_cpl),
         avg_centipawn_loss=round(avg_cpl, 1),
         blunders=blunders,
