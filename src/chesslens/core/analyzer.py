@@ -233,11 +233,12 @@ def analyze_game_detail(
 
                         loss = float(cpl)
                         losses.append(loss)
-                        if loss >= BLUNDER_THRESHOLD:
+                        sev = _severity(cpl) if cpl >= INACCURACY_THRESHOLD else None
+                        if sev == "blunder":
                             blunders += 1
-                        elif loss >= MISTAKE_THRESHOLD:
+                        elif sev == "mistake":
                             mistakes += 1
-                        elif loss >= INACCURACY_THRESHOLD:
+                        elif sev == "inaccuracy":
                             inaccuracies += 1
 
                         if cpl >= INACCURACY_THRESHOLD:
