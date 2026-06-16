@@ -1,13 +1,23 @@
+import asyncio
+import tempfile
+import webbrowser
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from chesslens.config import save_user_config, settings
-from chesslens.db.models import GameRow
-from chesslens.db.session import get_session
+from chesslens.core.analyzer import GameAnalysis, analyze_game
+from chesslens.core.fetcher import UserNotFoundError, get_games
+from chesslens.core.parser import parse_games
+from chesslens.core.patterns import extract_patterns
+from chesslens.core.renderer import render_report
+from chesslens.core.reporter import generate_narrative
+from chesslens.db.models import AnalysisRow, GameRow, ReportRow
+from chesslens.db.session import get_session, init_db
 
 app = typer.Typer(
     name="chesslens",
@@ -119,7 +129,121 @@ def report(
 ):
     """Monthly Wrapped report — opens in browser."""
     _require_username()
-    console.print("[yellow]Coming soon — issue #10[/yellow]")
+    init_db()
+
+    if month is None:
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    try:
+        year, mon = map(int, month.split("-"))
+    except ValueError:
+        console.print(f"[red]Invalid month format: {month}. Use YYYY-MM.[/red]")
+        raise typer.Exit(1)
+
+    # Check cache
+    with get_session() as session:
+        cached = session.execute(
+            select(ReportRow)
+            .where(ReportRow.username == settings.username)
+            .where(ReportRow.month == month)
+        ).scalar_one_or_none()
+
+    if cached:
+        console.print(f"[dim]Using cached report for {month}.[/dim]")
+        _open_html(cached.html, settings.username, month)
+        return
+
+    # Fetch
+    console.print(f"Fetching games for [bold]{month}[/bold]...")
+    try:
+        raw_games = asyncio.run(get_games(settings.username, year, mon))
+    except UserNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    if not raw_games:
+        console.print(f"[yellow]No blitz games found for {month}.[/yellow]")
+        raise typer.Exit(0)
+
+    games = parse_games(raw_games, settings.username)
+    console.print(f"Parsed [bold]{len(games)}[/bold] games.")
+
+    # Save new games to DB
+    with get_session() as session:
+        existing_ids = set(
+            r[0] for r in session.execute(
+                select(GameRow.id).where(GameRow.id.in_([g.id for g in games]))
+            ).all()
+        )
+        for g in games:
+            if g.id not in existing_ids:
+                session.add(GameRow(
+                    id=g.id, username=g.username, played_at=g.played_at,
+                    time_class=g.time_class, color=g.color, result=g.result,
+                    end_reason=g.end_reason, opponent=g.opponent,
+                    player_rating=g.player_rating, opponent_rating=g.opponent_rating,
+                    opening_eco=g.opening_eco, opening_name=g.opening_name,
+                    move_count=g.move_count, pgn=g.pgn,
+                ))
+
+    # Analyze new games with Stockfish (skip already analyzed)
+    with get_session() as session:
+        analyzed_ids = set(
+            r[0] for r in session.execute(
+                select(AnalysisRow.game_id).where(AnalysisRow.game_id.in_([g.id for g in games]))
+            ).all()
+        )
+
+    to_analyze = [g for g in games if g.id not in analyzed_ids]
+    analyses: dict[str, GameAnalysis] = {}
+
+    if to_analyze:
+        console.print(f"Analyzing [bold]{len(to_analyze)}[/bold] games with Stockfish...")
+        with get_session() as session:
+            for g in to_analyze:
+                result = analyze_game(g)
+                if result:
+                    analyses[g.id] = result
+                    session.add(AnalysisRow(
+                        game_id=result.game_id,
+                        accuracy=result.accuracy,
+                        avg_centipawn_loss=result.avg_centipawn_loss,
+                        blunders=result.blunders,
+                        mistakes=result.mistakes,
+                        inaccuracies=result.inaccuracies,
+                        timeout_move=result.timeout_move,
+                    ))
+
+    # Load existing analyses from DB for this month
+    with get_session() as session:
+        for a in session.execute(
+            select(AnalysisRow).where(AnalysisRow.game_id.in_([g.id for g in games]))
+        ).scalars().all():
+            if a.game_id not in analyses:
+                analyses[a.game_id] = GameAnalysis(
+                    game_id=a.game_id, accuracy=a.accuracy,
+                    avg_centipawn_loss=a.avg_centipawn_loss, blunders=a.blunders,
+                    mistakes=a.mistakes, inaccuracies=a.inaccuracies,
+                    timeout_move=a.timeout_move,
+                )
+
+    # Extract patterns → narrative → render
+    console.print("Extracting patterns...")
+    pattern_report = extract_patterns(games, analyses, month)
+
+    console.print("Generating narrative...")
+    narrative = generate_narrative(pattern_report)
+
+    weekly_ratings = _weekly_ratings(games)
+    html = render_report(pattern_report, narrative, weekly_ratings)
+
+    # Cache in DB
+    with get_session() as session:
+        session.add(ReportRow(
+            username=settings.username, month=month, html=html, narrative=narrative,
+        ))
+
+    _open_html(html, settings.username, month)
 
 
 @app.command()
@@ -144,7 +268,29 @@ def opening(
     console.print("[yellow]Coming soon — issue #12[/yellow]")
 
 
+# --- helpers ---
+
 def _require_username() -> None:
     if not settings.username:
         console.print("[red]No username set. Run: chesslens config --username <your_username>[/red]")
         raise typer.Exit(1)
+
+
+def _weekly_ratings(games) -> list[int]:
+    """Average player rating per calendar week, ordered chronologically."""
+    from collections import defaultdict
+    weeks: dict[int, list[int]] = defaultdict(list)
+    for g in games:
+        week = (g.played_at.day - 1) // 7 + 1
+        weeks[week].append(g.player_rating)
+    return [round(sum(v) / len(v)) for _, v in sorted(weeks.items())]
+
+
+def _open_html(html: str, username: str, month: str) -> None:
+    """Write HTML to reports dir and open in browser."""
+    out_dir = settings.reports_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{username}-{month}.html"
+    out_path.write_text(html, encoding="utf-8")
+    console.print(f"[green]Report saved:[/green] {out_path}")
+    webbrowser.open(out_path.as_uri())
