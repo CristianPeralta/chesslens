@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}chesslens — Opening: {{ breakdown.query }}{% endblock %}
+
+{% block head %}
+<style>
+  .chart-wrap { position: relative; height: 300px; }
+
+  .opening-header-meta { color: #a0a0a0; font-size: 0.95rem; margin-top: 0.4rem; }
+  .opening-winrate { font-size: 2.5rem; font-weight: 700; }
+
+  .wld-row {
+    display: flex;
+    gap: 2rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+  .wld-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .wld-count { font-size: 1.8rem; font-weight: 700; }
+  .wld-label { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #a0a0a0; }
+  .win-color   { color: #4ade80; }
+  .loss-color  { color: #f87171; }
+  .draw-color  { color: #a0a0a0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th { text-align: left; color: #a0a0a0; font-size: 0.8rem; font-weight: 600;
+       letter-spacing: 0.06em; text-transform: uppercase; padding: 0.4rem 0.5rem;
+       border-bottom: 1px solid #2a2a2a; }
+  td { padding: 0.5rem 0.5rem; border-bottom: 1px solid #1e1e1e; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #1e1e1e; }
+
+  .errors-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    text-align: center;
+  }
+  .error-count { font-size: 2rem; font-weight: 700; }
+  .error-label { font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
+                 letter-spacing: 0.06em; color: #a0a0a0; margin-top: 0.25rem; }
+  .blunder-color    { color: #f87171; }
+  .mistake-color    { color: #fb923c; }
+  .inaccuracy-color { color: #fbbf24; }
+
+  .no-data { color: #a0a0a0; font-style: italic; font-size: 0.9rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="card" style="margin-bottom: 2rem;">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem;">
+    <div>
+      <h1>♟ {{ breakdown.query }}</h1>
+      <div class="opening-header-meta">Opening breakdown — {{ breakdown.matched_games }} games</div>
+    </div>
+    <div style="text-align:right;">
+      <div class="opening-winrate">{{ (breakdown.win_rate * 100) | round(1) }}%</div>
+      <div class="opening-header-meta">win rate</div>
+    </div>
+  </div>
+  <div class="wld-row">
+    <div class="wld-item">
+      <span class="wld-count win-color">{{ breakdown.wins }}</span>
+      <span class="wld-label">Wins</span>
+    </div>
+    <div class="wld-item">
+      <span class="wld-count loss-color">{{ breakdown.losses }}</span>
+      <span class="wld-label">Losses</span>
+    </div>
+    <div class="wld-item">
+      <span class="wld-count draw-color">{{ breakdown.draws }}</span>
+      <span class="wld-label">Draws</span>
+    </div>
+  </div>
+</div>
+
+<!-- Variants chart -->
+{% if breakdown.variants %}
+<div class="card">
+  <h2>Variants — win rate</h2>
+  <div class="chart-wrap">
+    <canvas id="variantChart"></canvas>
+  </div>
+</div>
+
+<!-- Variants table -->
+<div class="card">
+  <h2>Variants breakdown</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Variant</th>
+        <th>ECO</th>
+        <th style="text-align:center;">Games</th>
+        <th style="text-align:center;">W</th>
+        <th style="text-align:center;">L</th>
+        <th style="text-align:center;">D</th>
+        <th style="text-align:right;">Win rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in breakdown.variants %}
+      <tr>
+        <td>{{ v.name }}</td>
+        <td>
+          {% if v.eco %}
+          <span class="badge badge-blue">{{ v.eco }}</span>
+          {% else %}
+          <span class="no-data">—</span>
+          {% endif %}
+        </td>
+        <td style="text-align:center;">{{ v.games }}</td>
+        <td style="text-align:center; color:#4ade80;">{{ v.wins }}</td>
+        <td style="text-align:center; color:#f87171;">{{ v.losses }}</td>
+        <td style="text-align:center; color:#a0a0a0;">{{ v.draws }}</td>
+        <td style="text-align:right;">
+          {% set wr = (v.win_rate * 100) | round(1) %}
+          <span style="color: {{ '#4ade80' if wr >= 50 else '#f87171' }}; font-weight:600;">
+            {{ wr }}%
+          </span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Error totals -->
+<div class="card">
+  <h2>Error totals (from analyzed games)</h2>
+  <div class="errors-grid">
+    <div>
+      <div class="error-count blunder-color">{{ breakdown.total_blunders }}</div>
+      <div class="error-label">Blunders</div>
+    </div>
+    <div>
+      <div class="error-count mistake-color">{{ breakdown.total_mistakes }}</div>
+      <div class="error-label">Mistakes</div>
+    </div>
+    <div>
+      <div class="error-count inaccuracy-color">{{ breakdown.total_inaccuracies }}</div>
+      <div class="error-label">Inaccuracies</div>
+    </div>
+  </div>
+</div>
+
+<!-- Lost-to table -->
+<div class="card">
+  <h2>Opponents who beat you</h2>
+  {% if breakdown.lost_to %}
+  <table>
+    <thead>
+      <tr>
+        <th>Opponent</th>
+        <th style="text-align:right;">Rating</th>
+        <th>Variant</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for lo in breakdown.lost_to %}
+      <tr>
+        <td>{{ lo.opponent }}</td>
+        <td style="text-align:right; font-variant-numeric: tabular-nums;">{{ lo.opponent_rating }}</td>
+        <td style="color:#a0a0a0; font-size:0.87rem;">{{ lo.opening_name }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="no-data">No losses recorded.</p>
+  {% endif %}
+</div>
+
+<script>
+Chart.defaults.color = "#a0a0a0";
+
+{% if breakdown.variants %}
+new Chart(document.getElementById("variantChart"), {
+  type: "bar",
+  data: {
+    labels: {{ variant_names | tojson }},
+    datasets: [{
+      label: "Win rate %",
+      data: {{ variant_winrates | tojson }},
+      backgroundColor: {{ variant_colors | tojson }},
+      borderRadius: 4,
+    }]
+  },
+  options: {
+    indexAxis: "y",
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        min: 0,
+        max: 100,
+        grid: { color: "#2a2a2a" },
+        ticks: { callback: v => v + "%" }
+      },
+      y: { grid: { display: false } }
+    }
+  }
+});
+{% endif %}
+</script>
+{% endblock %}

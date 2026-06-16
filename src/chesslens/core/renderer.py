@@ -51,3 +51,18 @@ def render_game(detail: GameDetailAnalysis, game: Game) -> str:
         eval_data=detail.eval_sequence,
         top_errors=detail.top_errors,
     )
+
+
+def render_opening(breakdown: "OpeningBreakdown") -> str:  # noqa: F821
+    """Render an opening breakdown to an HTML string."""
+    from chesslens.core.openings import OpeningBreakdown  # local import to avoid circular
+    template = _env.get_template("opening.html")
+    variant_names = [v.name for v in breakdown.variants]
+    variant_winrates = [round(v.win_rate * 100, 1) for v in breakdown.variants]
+    variant_colors = ["#4ade80" if wr >= 50 else "#f87171" for wr in variant_winrates]
+    return template.render(
+        breakdown=breakdown,
+        variant_names=variant_names,
+        variant_winrates=variant_winrates,
+        variant_colors=variant_colors,
+    )
