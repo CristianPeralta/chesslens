@@ -65,30 +65,33 @@ chesslens opening <name>             — opening breakdown (HTML)
 ```sql
 -- Cached games from chess.com API
 games (
-    id            varchar primary key,   -- chess.com game ID
-    username      varchar not null,
-    played_at     timestamptz not null,
-    time_class    varchar not null,      -- blitz | rapid | bullet | daily
-    white         varchar not null,
-    black         varchar not null,
-    result        varchar not null,      -- win | loss | draw
-    color         varchar not null,      -- white | black (from user perspective)
-    opening_eco   varchar,
-    opening_name  varchar,
-    pgn           text not null,
-    fetched_at    timestamptz default now()
+    id               varchar primary key,   -- chess.com game ID
+    username         varchar not null,
+    played_at        timestamptz not null,
+    time_class       varchar not null,      -- blitz | rapid | bullet | daily
+    color            varchar not null,      -- "white" | "black" from user perspective
+    result           varchar not null,      -- win | loss | draw
+    end_reason       varchar not null,      -- checkmate | timeout | resigned | draw | abandoned
+    opponent         varchar not null,
+    player_rating    int not null,
+    opponent_rating  int not null,
+    opening_eco      varchar,
+    opening_name     varchar,
+    move_count       int not null,
+    pgn              text not null,
+    fetched_at       timestamptz default now()
 );
 
 -- Stockfish analysis results per game
 analysis (
-    game_id       varchar primary key references games(id),
-    accuracy      float,
+    game_id           varchar primary key references games(id),
+    accuracy          float,
     avg_centipawn_loss float,
-    blunders      int default 0,
-    mistakes      int default 0,
-    inaccuracies  int default 0,
-    timeout_move  int,                  -- move number when time ran out, null if not timeout
-    analyzed_at   timestamptz default now()
+    blunders          int default 0,
+    mistakes          int default 0,
+    inaccuracies      int default 0,
+    timeout_move      int,                  -- ply at timeout, null if not timeout
+    analyzed_at       timestamptz default now()
 );
 
 -- Generated monthly reports (cache)
