@@ -1,10 +1,32 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: chesslens
+      POSTGRES_USER: chesslens
+      POSTGRES_PASSWORD: chesslens
+    volumes:
+      - chesslens_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chesslens -d chesslens"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   chesslens:
     build: .
     image: chesslens
     env_file:
       - path: .env
         required: false
+    environment:
+      CHESSLENS_DATABASE_URL: postgresql+psycopg://chesslens:chesslens@postgres:5432/chesslens
     volumes:
       - ${HOME}/.chesslens:/root/.chesslens  # config and DB persistence
       - ./reports:/app/reports               # generated HTML reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  chesslens_pgdata:
