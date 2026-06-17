@@ -10,11 +10,11 @@ from rich.table import Table
 from sqlalchemy import select
 
 from chesslens.config import save_user_config, settings
-from chesslens.core.analyzer import GameAnalysis, analyze_game
+from chesslens.core.analyzer import GameAnalysis, GameDetailAnalysis, analyze_game, analyze_game_detail
 from chesslens.core.fetcher import UserNotFoundError, get_games
 from chesslens.core.parser import parse_games
 from chesslens.core.patterns import extract_patterns
-from chesslens.core.renderer import render_report
+from chesslens.core.renderer import render_game, render_report
 from chesslens.core.reporter import generate_narrative
 from chesslens.db.models import AnalysisRow, GameRow, ReportRow
 from chesslens.db.session import get_session, init_db
@@ -253,19 +253,200 @@ def game(
 ):
     """Single game analysis — opens in browser."""
     _require_username()
+    init_db()
+
     if not last and not id:
         console.print("[red]Provide --last or --id <game_id>[/red]")
         raise typer.Exit(1)
-    console.print("[yellow]Coming soon — issue #11[/yellow]")
+
+    username = settings.username
+    game_row: GameRow | None = None
+
+    if last:
+        with get_session() as session:
+            result = session.execute(
+                select(GameRow)
+                .where(GameRow.username == username)
+                .order_by(GameRow.played_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            game_row = result
+        if game_row is None:
+            console.print("[red]No games found in DB. Run chesslens report first.[/red]")
+            raise typer.Exit(1)
+    else:
+        # Try DB first
+        with get_session() as session:
+            game_row = session.execute(
+                select(GameRow).where(GameRow.id == id)
+            ).scalar_one_or_none()
+
+        if game_row is None:
+            # Fetch current month
+            now = datetime.now(timezone.utc)
+            console.print(f"Game {id} not in DB — fetching current month...")
+            try:
+                raw_games = asyncio.run(get_games(username, now.year, now.month))
+            except UserNotFoundError as e:
+                console.print(f"[red]{e}[/red]")
+                raise typer.Exit(1)
+
+            games = parse_games(raw_games, username)
+            with get_session() as session:
+                existing_ids = set(
+                    r[0] for r in session.execute(
+                        select(GameRow.id).where(GameRow.id.in_([g.id for g in games]))
+                    ).all()
+                )
+                for g in games:
+                    if g.id not in existing_ids:
+                        session.add(GameRow(
+                            id=g.id, username=g.username, played_at=g.played_at,
+                            time_class=g.time_class, color=g.color, result=g.result,
+                            end_reason=g.end_reason, opponent=g.opponent,
+                            player_rating=g.player_rating, opponent_rating=g.opponent_rating,
+                            opening_eco=g.opening_eco, opening_name=g.opening_name,
+                            move_count=g.move_count, pgn=g.pgn,
+                        ))
+
+            with get_session() as session:
+                game_row = session.execute(
+                    select(GameRow).where(GameRow.id == id)
+                ).scalar_one_or_none()
+
+        if game_row is None:
+            # Fallback: previous month
+            prev_month = datetime.now(timezone.utc) - timedelta(days=30)
+            console.print("Not found this month — trying previous month...")
+            try:
+                raw_games = asyncio.run(get_games(username, prev_month.year, prev_month.month))
+            except UserNotFoundError:
+                raw_games = []
+
+            games = parse_games(raw_games, username)
+            with get_session() as session:
+                existing_ids = set(
+                    r[0] for r in session.execute(
+                        select(GameRow.id).where(GameRow.id.in_([g.id for g in games]))
+                    ).all()
+                )
+                for g in games:
+                    if g.id not in existing_ids:
+                        session.add(GameRow(
+                            id=g.id, username=g.username, played_at=g.played_at,
+                            time_class=g.time_class, color=g.color, result=g.result,
+                            end_reason=g.end_reason, opponent=g.opponent,
+                            player_rating=g.player_rating, opponent_rating=g.opponent_rating,
+                            opening_eco=g.opening_eco, opening_name=g.opening_name,
+                            move_count=g.move_count, pgn=g.pgn,
+                        ))
+
+            with get_session() as session:
+                game_row = session.execute(
+                    select(GameRow).where(GameRow.id == id)
+                ).scalar_one_or_none()
+
+        if game_row is None:
+            console.print(f"[red]Game {id} not found in DB or chess.com API.[/red]")
+            raise typer.Exit(1)
+
+    # Convert ORM row to domain Game object
+    from chesslens.core.parser import Game as DomainGame
+    domain_game = DomainGame(
+        id=game_row.id,
+        username=game_row.username,
+        played_at=game_row.played_at,
+        time_class=game_row.time_class,
+        color=game_row.color,
+        result=game_row.result,
+        end_reason=game_row.end_reason,
+        opponent=game_row.opponent,
+        player_rating=game_row.player_rating,
+        opponent_rating=game_row.opponent_rating,
+        opening_eco=game_row.opening_eco,
+        opening_name=game_row.opening_name,
+        move_count=game_row.move_count,
+        pgn=game_row.pgn,
+    )
+
+    console.print("Analyzing with Stockfish...")
+    detail = analyze_game_detail(domain_game)
+    if detail is None:
+        console.print("[red]Stockfish not found or analysis failed. Install stockfish and try again.[/red]")
+        raise typer.Exit(1)
+
+    html = render_game(detail, domain_game)
+    _open_game_html(html, username, domain_game.id)
 
 
 @app.command()
 def opening(
-    name: str = typer.Argument(..., help="Opening name, e.g. 'French Defense'"),
+    name: str = typer.Argument(..., help="Opening name to analyze (fuzzy match)"),
 ):
-    """Opening breakdown — opens in browser."""
+    """Single opening breakdown: win rate, variants, errors, opponents who beat you."""
+    from chesslens.core.openings import extract_opening_breakdown
+    from chesslens.core.parser import Game as DomainGame
+    from chesslens.core.renderer import render_opening
+
     _require_username()
-    console.print("[yellow]Coming soon — issue #12[/yellow]")
+    init_db()
+    username = settings.username
+
+    with get_session() as session:
+        rows = session.execute(
+            select(GameRow).where(GameRow.username == username)
+        ).scalars().all()
+
+    if not rows:
+        console.print("[yellow]No games in DB — run chesslens report first[/yellow]")
+        raise typer.Exit(0)
+
+    games = [
+        DomainGame(
+            id=r.id,
+            username=r.username,
+            played_at=r.played_at,
+            time_class=r.time_class,
+            color=r.color,
+            result=r.result,
+            end_reason=r.end_reason,
+            opponent=r.opponent,
+            player_rating=r.player_rating,
+            opponent_rating=r.opponent_rating,
+            opening_eco=r.opening_eco,
+            opening_name=r.opening_name,
+            move_count=r.move_count,
+            pgn=r.pgn,
+        )
+        for r in rows
+    ]
+
+    game_ids = [g.id for g in games]
+    with get_session() as session:
+        analysis_rows = session.execute(
+            select(AnalysisRow).where(AnalysisRow.game_id.in_(game_ids))
+        ).scalars().all()
+
+    analyses = {
+        a.game_id: GameAnalysis(
+            game_id=a.game_id,
+            accuracy=a.accuracy,
+            avg_centipawn_loss=a.avg_centipawn_loss,
+            blunders=a.blunders,
+            mistakes=a.mistakes,
+            inaccuracies=a.inaccuracies,
+            timeout_move=a.timeout_move,
+        )
+        for a in analysis_rows
+    }
+
+    breakdown = extract_opening_breakdown(games, analyses, name)
+    if breakdown is None:
+        console.print(f"[yellow]Not enough data: fewer than 5 games found for '{name}'[/yellow]")
+        raise typer.Exit(1)
+
+    html = render_opening(breakdown)
+    _open_opening_html(html, username, name)
 
 
 # --- helpers ---
@@ -284,6 +465,27 @@ def _weekly_ratings(games) -> list[int]:
         week = (g.played_at.day - 1) // 7 + 1
         weeks[week].append(g.player_rating)
     return [round(sum(v) / len(v)) for _, v in sorted(weeks.items())]
+
+
+def _open_game_html(html: str, username: str, game_id: str) -> None:
+    """Write game HTML to reports dir and open in browser."""
+    out_dir = settings.reports_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{username}-game-{game_id}.html"
+    out_path.write_text(html, encoding="utf-8")
+    console.print(f"[green]Report saved:[/green] {out_path}")
+    webbrowser.open(out_path.as_uri())
+
+
+def _open_opening_html(html: str, username: str, name: str) -> None:
+    """Write opening breakdown HTML to reports dir and open in browser."""
+    slug = name.lower().replace(" ", "-")
+    out_dir = settings.reports_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{username}-opening-{slug}.html"
+    path.write_text(html, encoding="utf-8")
+    console.print(f"[green]Opening report saved to {path}[/green]")
+    webbrowser.open(str(path))
 
 
 def _open_html(html: str, username: str, month: str) -> None:
