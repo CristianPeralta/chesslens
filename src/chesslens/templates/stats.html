@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}chesslens — Stats{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom: 2rem;">
+  <h1>♟ {{ username }}</h1>
+  <div style="color: #a0a0a0; font-size: 0.95rem; margin-top: 0.4rem;">Last 30 days</div>
+</div>
+
+<div class="card">
+  <h2>Player stats</h2>
+
+  <div class="stat-row">
+    <span class="stat-label">Rating</span>
+    <span class="stat-value">
+      {{ current_rating }}
+      {% if rating_delta is not none %}
+        {% if rating_delta >= 0 %}
+          <span style="color: #4ade80; font-size: 0.9rem;">▲{{ rating_delta }} this week</span>
+        {% else %}
+          <span style="color: #f87171; font-size: 0.9rem;">▼{{ rating_delta | abs }} this week</span>
+        {% endif %}
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="stat-row">
+    <span class="stat-label">Last 10 games</span>
+    <span class="stat-value">
+      <span style="color: #4ade80;">{{ wins10 }}W</span>
+      <span style="color: #a0a0a0;"> {{ draws10 }}D</span>
+      <span style="color: #f87171;"> {{ losses10 }}L</span>
+      &nbsp;— {{ (wr10 * 100) | round(0) | int }}% win rate
+    </span>
+  </div>
+
+  {% if best_opening %}
+  <div class="stat-row">
+    <span class="stat-label">Best opening</span>
+    <span class="stat-value" style="color: #4ade80;">{{ best_opening }}</span>
+  </div>
+  {% endif %}
+
+  {% if worst_opening %}
+  <div class="stat-row">
+    <span class="stat-label">Worst opening</span>
+    <span class="stat-value" style="color: #f87171;">{{ worst_opening }}</span>
+  </div>
+  {% endif %}
+
+  <div class="stat-row">
+    <span class="stat-label">Timeouts (7d)</span>
+    <span class="stat-value">
+      {% if timeouts_7d >= 3 %}
+        <span style="color: #f87171;">{{ timeouts_7d }}</span>
+      {% elif timeouts_7d >= 1 %}
+        <span style="color: #fbbf24;">{{ timeouts_7d }}</span>
+      {% else %}
+        <span style="color: #4ade80;">{{ timeouts_7d }}</span>
+      {% endif %}
+    </span>
+  </div>
+</div>
+{% endblock %}
