@@ -30,10 +30,6 @@ from chesslens.core.reporter import generate_narrative
 from chesslens.db.models import AnalysisRow, GameRow, ReportRow
 from chesslens.db.session import get_session, init_db
 
-# WHY: import settings only for the username-isolation test (patch target);
-# no route handler reads settings.username.
-from chesslens.config import settings  # noqa: F401
-
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 _env = Environment(
     loader=FileSystemLoader(_TEMPLATES_DIR),

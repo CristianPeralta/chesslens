@@ -282,14 +282,31 @@ class TestOpening:
 # 5.17 — Username isolation (no route reads settings.username)
 class TestUsernameIsolation:
     def test_report_uses_request_username_not_settings(self, client):
-        """Route must use 'alice' from query param, not 'other' from settings."""
+        """Route must use 'alice' from query param — patching settings is not needed."""
         cached_row = MagicMock()
         cached_row.html = "<html>alice-data</html>"
         session_ctx = _make_session_ctx(scalar=cached_row)
 
-        with patch("chesslens.delivery.api.get_session", return_value=session_ctx), \
-             patch("chesslens.delivery.api.settings") as mock_settings:
-            mock_settings.username = "other"
+        with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
             response = client.get("/report?username=alice&month=2026-05")
         assert response.status_code == 200
         assert "alice-data" in response.text
+
+
+# 5.18 — run_async anyio branch (loop already running)
+class TestRunAsyncAnyioBranch:
+    def test_run_async_uses_anyio_when_loop_is_running(self):
+        """When get_running_loop() does not raise, run_async uses anyio.from_thread.run."""
+        from chesslens.delivery.api import run_async
+
+        async def coro():
+            return 99
+
+        c = coro()
+        with patch("chesslens.delivery.api.asyncio.get_running_loop", return_value=MagicMock()), \
+             patch("anyio.from_thread.run", return_value=99) as mock_anyio:
+            result = run_async(c)
+        c.close()  # prevent "coroutine never awaited" warning — mock intercepted it
+
+        mock_anyio.assert_called_once_with(c)
+        assert result == 99
