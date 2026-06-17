@@ -5,6 +5,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from chesslens.core.analyzer import GameDetailAnalysis
+from chesslens.core.parser import Game
 from chesslens.core.patterns import PatternReport
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
@@ -36,4 +38,31 @@ def render_report(report: PatternReport, narrative: str, weekly_ratings: list[in
         opening_names=opening_names,
         opening_winrates=opening_winrates,
         opening_colors=opening_colors,
+    )
+
+
+def render_game(detail: GameDetailAnalysis, game: Game) -> str:
+    """Render a single-game analysis to an HTML string."""
+    template = _env.get_template("game.html")
+    return template.render(
+        detail=detail,
+        game=game,
+        eval_labels=list(range(len(detail.eval_sequence))),
+        eval_data=detail.eval_sequence,
+        top_errors=detail.top_errors,
+    )
+
+
+def render_opening(breakdown: "OpeningBreakdown") -> str:  # noqa: F821
+    """Render an opening breakdown to an HTML string."""
+    from chesslens.core.openings import OpeningBreakdown  # local import to avoid circular
+    template = _env.get_template("opening.html")
+    variant_names = [v.name for v in breakdown.variants]
+    variant_winrates = [round(v.win_rate * 100, 1) for v in breakdown.variants]
+    variant_colors = ["#4ade80" if wr >= 50 else "#f87171" for wr in variant_winrates]
+    return template.render(
+        breakdown=breakdown,
+        variant_names=variant_names,
+        variant_winrates=variant_winrates,
+        variant_colors=variant_colors,
     )

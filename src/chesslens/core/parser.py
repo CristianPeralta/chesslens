@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -35,6 +36,28 @@ class Game:
     opening_name: str | None
     move_count: int
     pgn: str
+
+
+_CLK_RE = re.compile(r"\[%clk\s+(\d+):(\d+):(\d+)(?:\.\d+)?\]")
+
+
+def extract_clock(comment: str | None) -> int | None:
+    """Extract remaining clock time in seconds from a PGN move comment.
+
+    Parses the standard chess.com format: [%clk H:MM:SS] or [%clk H:MM:SS.f]
+    Returns total seconds as int, or None if the comment is absent or unparseable.
+    MUST NOT raise exceptions to the caller.
+    """
+    try:
+        if comment is None:
+            return None
+        match = _CLK_RE.search(comment)
+        if match is None:
+            return None
+        hours, minutes, seconds = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        return hours * 3600 + minutes * 60 + seconds
+    except Exception:
+        return None
 
 
 def _game_id(url: str) -> str:

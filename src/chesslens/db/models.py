@@ -51,6 +51,7 @@ class AnalysisRow(Base):
     mistakes: Mapped[int] = mapped_column(default=0)
     inaccuracies: Mapped[int] = mapped_column(default=0)
     timeout_move: Mapped[int | None]  # ply at timeout, null if not timeout
+    remaining_clock: Mapped[int | None]  # seconds left on player's clock at last move
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

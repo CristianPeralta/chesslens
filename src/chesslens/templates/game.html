@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block title %}chesslens — game {{ game.id }}{% endblock %}
+
+{% block head %}
+<style>
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .game-meta { color: #a0a0a0; font-size: 0.9rem; margin-top: 0.4rem; line-height: 1.6; }
+  .chart-wrap { position: relative; height: 220px; }
+
+  .errors-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .errors-table th {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #2a2a2a;
+    color: #a0a0a0;
+    font-weight: 600;
+  }
+  .errors-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #1f1f1f;
+    vertical-align: top;
+  }
+  .errors-table tr:last-child td { border-bottom: none; }
+  .best-line { color: #60a5fa; font-size: 0.8rem; font-family: monospace; }
+
+  .clock-value { font-size: 1.75rem; font-weight: 700; }
+  .clock-label { color: #a0a0a0; font-size: 0.85rem; margin-top: 0.25rem; }
+
+  .replay-btn {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.5rem 1.25rem;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    background: #1a1a1a;
+    color: #606060;
+    cursor: not-allowed;
+    font-size: 0.9rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="card" style="margin-bottom: 2rem;">
+  <div class="result-header">
+    <div>
+      <h1>
+        Game Analysis
+        {% if game.result == "win" %}
+          <span class="badge badge-green" style="font-size:1rem; vertical-align:middle;">Win</span>
+        {% elif game.result == "loss" %}
+          <span class="badge badge-red" style="font-size:1rem; vertical-align:middle;">Loss</span>
+        {% else %}
+          <span class="badge" style="background:#1f1f1f; color:#a0a0a0; font-size:1rem; vertical-align:middle;">Draw</span>
+        {% endif %}
+      </h1>
+      <div class="game-meta">
+        vs <strong style="color:#e8e8e8;">{{ game.opponent }}</strong>
+        &nbsp;·&nbsp; {{ game.played_at.strftime("%Y-%m-%d") }}
+        &nbsp;·&nbsp; {{ game.time_class | capitalize }}
+        {% if game.opening_name %}
+        &nbsp;·&nbsp; {{ game.opening_name }}
+        {% endif %}
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:2rem; font-weight:700;">
+        {{ detail.accuracy | round(1) }}%
+        <span style="font-size:0.9rem; color:#a0a0a0; font-weight:400;">accuracy</span>
+      </div>
+      <div style="color:#a0a0a0; font-size:0.85rem; margin-top:0.25rem;">
+        {{ detail.blunders }}B &nbsp; {{ detail.mistakes }}M &nbsp; {{ detail.inaccuracies }}I
+        &nbsp;·&nbsp; avg {{ detail.avg_centipawn_loss }} cp loss
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Eval chart -->
+<div class="card">
+  <h2>Evaluation</h2>
+  <div class="chart-wrap">
+    <canvas id="evalChart"></canvas>
+  </div>
+</div>
+
+<!-- Top errors + Clock side by side -->
+<div class="grid-2">
+  <!-- Top errors -->
+  <div class="card" style="grid-column: span 2;">
+    <h2>Top Mistakes</h2>
+    {% if detail.top_errors %}
+    <table class="errors-table">
+      <thead>
+        <tr>
+          <th>Move</th>
+          <th>Played</th>
+          <th>CPL</th>
+          <th>Severity</th>
+          <th>Best line</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for err in detail.top_errors %}
+        <tr>
+          <td>{{ err.ply // 2 + 1 }}</td>
+          <td><strong>{{ err.san }}</strong></td>
+          <td>{{ err.centipawn_loss }}</td>
+          <td>
+            {% if err.severity == "blunder" %}
+              <span class="badge badge-red">blunder</span>
+            {% elif err.severity == "mistake" %}
+              <span class="badge badge-yellow">mistake</span>
+            {% else %}
+              <span class="badge badge-blue">inaccuracy</span>
+            {% endif %}
+          </td>
+          <td class="best-line">{{ err.best_line | join(" ") }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:#a0a0a0;">No significant errors detected.</p>
+    {% endif %}
+
+    <button class="replay-btn" disabled title="Coming in Phase 2">
+      Replay from blunder
+    </button>
+  </div>
+</div>
+
+<!-- Clock card -->
+{% if detail.remaining_clock %}
+<div class="card">
+  <h2>Clock at Last Move</h2>
+  <div class="clock-value">
+    {{ "%02d:%02d" | format(detail.remaining_clock // 60, detail.remaining_clock % 60) }}
+  </div>
+  <div class="clock-label">remaining on your clock</div>
+</div>
+{% endif %}
+
+<script>
+const evalLabels = {{ eval_labels | tojson }};
+const evalData   = {{ eval_data | tojson }};
+
+new Chart(document.getElementById("evalChart"), {
+  type: "line",
+  data: {
+    labels: evalLabels,
+    datasets: [
+      {
+        label: "Eval (cp)",
+        data: evalData,
+        borderColor: "#60a5fa",
+        backgroundColor: "rgba(96,165,250,0.08)",
+        tension: 0.2,
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+      {
+        label: "Equal",
+        data: evalLabels.map(() => 0),
+        borderColor: "#2a2a2a",
+        borderDash: [4, 4],
+        pointRadius: 0,
+        borderWidth: 1,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { color: "#1a1a1a" }, ticks: { display: false } },
+      y: {
+        grid: { color: "#2a2a2a" },
+        min: -1000,
+        max: 1000,
+        ticks: { callback: v => (v > 0 ? "+" : "") + v }
+      }
+    }
+  }
+});
+</script>
+{% endblock %}
