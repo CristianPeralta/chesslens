@@ -381,11 +381,72 @@ def game(
 
 @app.command()
 def opening(
-    name: str = typer.Argument(..., help="Opening name, e.g. 'French Defense'"),
+    name: str = typer.Argument(..., help="Opening name to analyze (fuzzy match)"),
 ):
-    """Opening breakdown — opens in browser."""
+    """Single opening breakdown: win rate, variants, errors, opponents who beat you."""
+    from chesslens.core.openings import extract_opening_breakdown
+    from chesslens.core.parser import Game as DomainGame
+    from chesslens.core.renderer import render_opening
+
     _require_username()
-    console.print("[yellow]Coming soon — issue #12[/yellow]")
+    init_db()
+    username = settings.username
+
+    with get_session() as session:
+        rows = session.execute(
+            select(GameRow).where(GameRow.username == username)
+        ).scalars().all()
+
+    if not rows:
+        console.print("[yellow]No games in DB — run chesslens report first[/yellow]")
+        raise typer.Exit(0)
+
+    games = [
+        DomainGame(
+            id=r.id,
+            username=r.username,
+            played_at=r.played_at,
+            time_class=r.time_class,
+            color=r.color,
+            result=r.result,
+            end_reason=r.end_reason,
+            opponent=r.opponent,
+            player_rating=r.player_rating,
+            opponent_rating=r.opponent_rating,
+            opening_eco=r.opening_eco,
+            opening_name=r.opening_name,
+            move_count=r.move_count,
+            pgn=r.pgn,
+        )
+        for r in rows
+    ]
+
+    game_ids = [g.id for g in games]
+    with get_session() as session:
+        analysis_rows = session.execute(
+            select(AnalysisRow).where(AnalysisRow.game_id.in_(game_ids))
+        ).scalars().all()
+
+    analyses = {
+        a.game_id: GameAnalysis(
+            game_id=a.game_id,
+            accuracy=a.accuracy,
+            avg_centipawn_loss=a.avg_centipawn_loss,
+            blunders=a.blunders,
+            mistakes=a.mistakes,
+            inaccuracies=a.inaccuracies,
+            timeout_move=a.timeout_move,
+        )
+        for a in analysis_rows
+    }
+
+    breakdown = extract_opening_breakdown(games, analyses, name)
+    if breakdown is None:
+        console.print(f"[yellow]Not enough data: fewer than 5 games found for '{name}'[/yellow]")
+        raise typer.Exit(1)
+
+    html = render_opening(breakdown)
+    _open_opening_html(html, username, name)
 
 
 # --- helpers ---
@@ -414,6 +475,17 @@ def _open_game_html(html: str, username: str, game_id: str) -> None:
     out_path.write_text(html, encoding="utf-8")
     console.print(f"[green]Report saved:[/green] {out_path}")
     webbrowser.open(out_path.as_uri())
+
+
+def _open_opening_html(html: str, username: str, name: str) -> None:
+    """Write opening breakdown HTML to reports dir and open in browser."""
+    slug = name.lower().replace(" ", "-")
+    out_dir = settings.reports_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{username}-opening-{slug}.html"
+    path.write_text(html, encoding="utf-8")
+    console.print(f"[green]Opening report saved to {path}[/green]")
+    webbrowser.open(str(path))
 
 
 def _open_html(html: str, username: str, month: str) -> None:
