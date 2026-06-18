@@ -62,19 +62,15 @@ Blunders per game: {f"{report.blunders_per_game:.2f}" if report.blunders_per_gam
 Top openings: {top_openings}
 Worst opening: {worst_opening_info}
 
---- TASK ---
-Write a concise monthly chess report with exactly these three sections:
+--- TAREA ---
+Escribí un informe mensual de ajedrez en español neutro. Usá prosa fluida, sin headers, sin bullets, sin guiones, sin formato Markdown. Escribí como un entrenador real hablándole directamente al jugador.
 
-## Month Summary
-2-3 sentences summarizing overall performance and the main trend.
+El informe debe cubrir tres ideas en este orden, en párrafos separados:
+1. Resumen del mes: 2-3 oraciones sobre el rendimiento general y la tendencia principal.
+2. Patrón principal: 1-2 oraciones identificando lo que más está frenando al jugador, con un dato concreto de las estadísticas.
+3. Tres recomendaciones: tres sugerencias específicas y accionables, escritas en prosa natural (no lista numerada). Cada una debe empezar con un verbo de acción. Ajustá el nivel según las stats del jugador.
 
-## Main Pattern
-1-2 sentences identifying the single most important pattern holding this player back, with a specific example from the stats above.
-
-## 3 Actionable Recommendations
-Three specific, concrete study or practice recommendations. Each should be a single sentence starting with an action verb. Tailor recommendations to the player's level based on their stats (higher accuracy/lower CPL = more advanced player).
-
-Keep the total response under 300 words. Be direct and encouraging, like a real coach.
+Máximo 300 palabras. Tono cálido y directo.
 """
 
 
