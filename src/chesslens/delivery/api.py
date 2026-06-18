@@ -119,6 +119,7 @@ app.include_router(auth_router)
 @app.exception_handler(Exception)
 async def on_error(request, exc):
     """Return a plain-text 500 for unhandled exceptions (no traceback leaks)."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url)
     return PlainTextResponse("Internal server error", status_code=500)
 
 
