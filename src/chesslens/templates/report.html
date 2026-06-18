@@ -13,10 +13,12 @@
 
   .narrative {
     line-height: 1.7;
-    white-space: pre-wrap;
     color: #d0d0d0;
     font-size: 0.97rem;
   }
+  .narrative h2 { font-size: 1.1rem; margin-top: 1.2rem; margin-bottom: 0.4rem; }
+  .narrative ol, .narrative ul { padding-left: 1.25rem; }
+  .narrative li { margin-bottom: 0.4rem; }
 
   .pain-card {
     border-left: 4px solid #fbbf24;
@@ -71,7 +73,7 @@
 <!-- Narrative -->
 <div class="card">
   <h2>Month Summary</h2>
-  <div class="narrative">{{ narrative }}</div>
+  <div class="narrative">{{ narrative | safe }}</div>
 </div>
 
 <!-- Charts row -->

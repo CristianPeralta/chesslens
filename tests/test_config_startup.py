@@ -11,7 +11,7 @@ class TestJwtConfigDefaults:
 
         from chesslens.config import Settings
 
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.jwt_secret == ""
 
     def test_jwt_secret_loaded_from_env(self, monkeypatch):

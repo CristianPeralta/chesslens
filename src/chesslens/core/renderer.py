@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import markdown as md
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from chesslens.core.analyzer import GameDetailAnalysis
@@ -32,7 +33,7 @@ def render_report(report: PatternReport, narrative: str, weekly_ratings: list[in
         username=report.username,
         month=report.month,
         report=report,
-        narrative=narrative,
+        narrative=md.markdown(narrative),
         weekly_labels=weekly_labels,
         weekly_ratings=weekly_ratings,
         opening_names=opening_names,
