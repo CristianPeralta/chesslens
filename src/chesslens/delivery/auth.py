@@ -138,23 +138,26 @@ def login(body: LoginRequest):
             select(UserRow).where(UserRow.email == email)
         ).scalar_one_or_none()
 
-    if user is None:
-        # WHY: dummy bcrypt verify prevents timing attack — see module-level _DUMMY_HASH.
-        verify_password(body.password, _DUMMY_HASH)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
+        if user is None:
+            # WHY: dummy bcrypt verify prevents timing attack — see module-level _DUMMY_HASH.
+            verify_password(body.password, _DUMMY_HASH)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
 
-    if not verify_password(body.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
+        if not verify_password(body.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+
+        access_token = create_access_token(user)
+        refresh_token = create_refresh_token(user)
 
     return TokenResponse(
-        access_token=create_access_token(user),
-        refresh_token=create_refresh_token(user),
+        access_token=access_token,
+        refresh_token=refresh_token,
     )
 
 
