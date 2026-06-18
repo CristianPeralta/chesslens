@@ -71,9 +71,15 @@ def _find_stockfish(path: str | None = None) -> str:
     return found
 
 
-def _accuracy(avg_cpl: float) -> float:
-    # WHY: approximation of chess.com's accuracy formula, calibrated to human play
-    return round(max(0.0, min(100.0, 103.1668 * math.exp(-0.04354 * avg_cpl) - 3.1669)), 1)
+def _win_prob(cp: float) -> float:
+    """Win probability (0–100) from a centipawn score (white's perspective)."""
+    return 100.0 / (1.0 + math.exp(-cp / 600.0))
+
+
+def _accuracy(avg_wpl: float) -> float:
+    # WHY: chess.com's formula expects win-probability loss (0–100 scale), not raw CPL.
+    # Passing raw CPL (avg ~50) into this formula gives ~9%; passing WPL (~2) gives ~90%.
+    return round(max(0.0, min(100.0, 103.1668 * math.exp(-0.04354 * avg_wpl) - 3.1669)), 1)
 
 
 def analyze_game(
@@ -95,7 +101,8 @@ def analyze_game(
 
     player_color = chess.WHITE if game.color == "white" else chess.BLACK
     limit = chess.engine.Limit(depth=depth)
-    losses: list[float] = []
+    cpl_losses: list[float] = []
+    wpl_losses: list[float] = []
     blunders = mistakes = inaccuracies = 0
 
     try:
@@ -113,14 +120,17 @@ def analyze_game(
                     after = curr_info["score"].white().score(mate_score=10000)
 
                     if before is not None and after is not None:
-                        loss = (before - after) if player_color == chess.WHITE else (after - before)
-                        loss = max(0.0, float(loss))
-                        losses.append(loss)
-                        if loss >= BLUNDER_THRESHOLD:
+                        cpl = (before - after) if player_color == chess.WHITE else (after - before)
+                        cpl = max(0.0, float(cpl))
+                        cpl_losses.append(cpl)
+                        wpl = _win_prob(before) - _win_prob(after) if player_color == chess.WHITE \
+                            else _win_prob(after) - _win_prob(before)
+                        wpl_losses.append(max(0.0, wpl))
+                        if cpl >= BLUNDER_THRESHOLD:
                             blunders += 1
-                        elif loss >= MISTAKE_THRESHOLD:
+                        elif cpl >= MISTAKE_THRESHOLD:
                             mistakes += 1
-                        elif loss >= INACCURACY_THRESHOLD:
+                        elif cpl >= INACCURACY_THRESHOLD:
                             inaccuracies += 1
 
                 prev_info = curr_info
@@ -129,11 +139,12 @@ def analyze_game(
         logger.warning("Stockfish analysis failed for game %s: %s", game.id, e)
         return None
 
-    avg_cpl = sum(losses) / len(losses) if losses else 0.0
+    avg_cpl = sum(cpl_losses) / len(cpl_losses) if cpl_losses else 0.0
+    avg_wpl = sum(wpl_losses) / len(wpl_losses) if wpl_losses else 0.0
 
     return GameAnalysis(
         game_id=game.id,
-        accuracy=_accuracy(avg_cpl),
+        accuracy=_accuracy(avg_wpl),
         avg_centipawn_loss=round(avg_cpl, 1),
         blunders=blunders,
         mistakes=mistakes,
@@ -190,7 +201,8 @@ def analyze_game_detail(
 
     eval_sequence: list[int] = []
     player_errors: list[MoveError] = []
-    losses: list[float] = []
+    cpl_losses: list[float] = []
+    wpl_losses: list[float] = []
     blunders = mistakes = inaccuracies = 0
     remaining_clock: int | None = None
     last_player_node = None
@@ -231,8 +243,10 @@ def analyze_game_detail(
                         else:
                             cpl = max(0, after_raw - before_raw)
 
-                        loss = float(cpl)
-                        losses.append(loss)
+                        cpl_losses.append(float(cpl))
+                        wpl = _win_prob(before_raw) - _win_prob(after_raw) if player_color == chess.WHITE \
+                            else _win_prob(after_raw) - _win_prob(before_raw)
+                        wpl_losses.append(max(0.0, wpl))
                         sev = _severity(cpl) if cpl >= INACCURACY_THRESHOLD else None
                         if sev == "blunder":
                             blunders += 1
@@ -264,14 +278,15 @@ def analyze_game_detail(
         remaining_clock = extract_clock(last_player_node.comment)
 
     top_errors = sorted(player_errors, key=lambda e: e.centipawn_loss, reverse=True)[:3]
-    avg_cpl = sum(losses) / len(losses) if losses else 0.0
+    avg_cpl = sum(cpl_losses) / len(cpl_losses) if cpl_losses else 0.0
+    avg_wpl = sum(wpl_losses) / len(wpl_losses) if wpl_losses else 0.0
 
     return GameDetailAnalysis(
         game_id=game.id,
         eval_sequence=eval_sequence,
         top_errors=top_errors,
         remaining_clock=remaining_clock,
-        accuracy=_accuracy(avg_cpl),
+        accuracy=_accuracy(avg_wpl),
         avg_centipawn_loss=round(avg_cpl, 1),
         blunders=blunders,
         mistakes=mistakes,
