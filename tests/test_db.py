@@ -37,32 +37,45 @@ def db_session(db_engine):
 
 
 # ---------------------------------------------------------------------------
-# Task 4.1 — init_db() creates all 3 tables
+# Task 4.1 — init_db() delegates to Alembic upgrade head
 # ---------------------------------------------------------------------------
 
 
-def test_init_db_creates_all_tables():
-    """init_db() must create games, analysis, and reports tables."""
-    from sqlalchemy import create_engine
+def test_init_db_calls_alembic_upgrade():
+    """init_db() must invoke alembic command.upgrade(cfg, 'head') — not create_all()."""
+    from unittest.mock import patch
 
-    from chesslens.db.models import Base
     from chesslens.db.session import init_db
 
-    engine = create_engine("sqlite:///:memory:")
-    # Monkey-patch the module-level engine used by init_db
-    import chesslens.db.session as db_session_module
-
-    original_engine = db_session_module.engine
-    db_session_module.engine = engine
-    try:
+    with patch("chesslens.db.session.command") as mock_command:
         init_db()
-        table_names = inspect(engine).get_table_names()
-        assert "games" in table_names
-        assert "analysis" in table_names
-        assert "reports" in table_names
-    finally:
-        db_session_module.engine = original_engine
-        engine.dispose()
+        mock_command.upgrade.assert_called_once()
+        # Second positional argument must be "head"
+        assert mock_command.upgrade.call_args[0][1] == "head"
+
+
+def test_init_db_creates_all_tables(tmp_path):
+    """init_db() on a fresh SQLite DB creates games, analysis, and reports tables."""
+    from unittest.mock import patch
+
+    from sqlalchemy import create_engine
+
+    db_url = f"sqlite:///{tmp_path}/test.db"
+
+    # Patch settings.db_url so Alembic env.py targets the temp file DB.
+    # A file-based SQLite is required because Alembic's NullPool engine
+    # creates a new connection per migration step (in-memory would be empty).
+    with patch("chesslens.config.settings.database_url", db_url):
+        from chesslens.db.session import init_db
+
+        init_db()
+
+    verify_engine = create_engine(db_url)
+    table_names = inspect(verify_engine).get_table_names()
+    assert "games" in table_names
+    assert "analysis" in table_names
+    assert "reports" in table_names
+    verify_engine.dispose()
 
 
 # ---------------------------------------------------------------------------

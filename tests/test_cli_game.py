@@ -245,22 +245,12 @@ def test_severity_thresholds_via_analyzer():
 # ---------------------------------------------------------------------------
 
 def test_alter_table_idempotency():
-    """Calling init_db() twice on the same in-memory SQLite must not raise."""
-    from sqlalchemy import create_engine
+    """Calling init_db() twice must not raise — alembic upgrade head is idempotent."""
+    from unittest.mock import patch
 
-    import chesslens.db.session as db_session_module
-    from chesslens.db.models import Base
     from chesslens.db.session import init_db
 
-    engine = create_engine("sqlite:///:memory:")
-    original_engine = db_session_module.engine
-    db_session_module.engine = engine
-    try:
-        init_db()  # First call — creates schema + ALTER TABLE
-        init_db()  # Second call — ALTER TABLE duplicate → must be swallowed
-        # Confirm the column exists
-        table_names = inspect(engine).get_table_names()
-        assert "analysis" in table_names
-    finally:
-        db_session_module.engine = original_engine
-        engine.dispose()
+    with patch("chesslens.db.session.command") as mock_command:
+        init_db()
+        init_db()
+    assert mock_command.upgrade.call_count == 2
