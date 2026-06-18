@@ -54,7 +54,7 @@
       <h1>♟ {{ username }}</h1>
       <div class="header-meta">Monthly report — {{ month }}</div>
     </div>
-    <div style="text-align:right;">
+    <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:0.5rem;">
       <div class="header-rating">
         {{ report.avg_accuracy | round(0) | int }}%
         <span style="font-size:1rem; color:#a0a0a0; font-weight:400;">accuracy</span>
@@ -66,6 +66,13 @@
         <span style="color:#f87171;"> {{ report.losses }}L</span>
         &nbsp;·&nbsp; {{ (report.win_rate * 100) | round(0) | int }}% win rate
       </div>
+      <a id="download-btn" download="chesslens-report-{{ month }}.html"
+         style="font-size:0.8rem; color:#a0a0a0; text-decoration:none; border:1px solid #444;
+                padding:0.25rem 0.7rem; border-radius:6px; cursor:pointer;"
+         onmouseover="this.style.color='#fff';this.style.borderColor='#888';"
+         onmouseout="this.style.color='#a0a0a0';this.style.borderColor='#444';">
+        ↓ Download
+      </a>
     </div>
   </div>
 </div>
@@ -224,5 +231,6 @@ new Chart(document.getElementById("openingChart"), {
     }
   }
 });
+document.getElementById('download-btn').href = window.location.href;
 </script>
 {% endblock %}
