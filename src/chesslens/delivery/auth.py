@@ -4,10 +4,9 @@ WHY: Kept separate from api.py — auth is a distinct concern (crypto, tokens,
 user CRUD). Keeps api.py focused on data routes; auth surface is reviewable
 in isolation.
 """
-from __future__ import annotations
-
 from datetime import datetime, timezone
 
+import jwt as pyjwt
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -24,6 +23,11 @@ from chesslens.delivery.security import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# WHY: pre-computed bcrypt hash used in the anti-enumeration dummy verify path.
+# Must be a valid hash — bcrypt rejects malformed hashes with ValueError which
+# would leak a timing difference vs. the unknown-email path.
+_DUMMY_HASH = "$2b$12$e8C8IDoHvxvT91Rb1PW4i.tmH3rd/lx0rjwjxkg.YocnRU77y0F8K"
 
 
 # ---------------------------------------------------------------------------
@@ -79,22 +83,10 @@ def register(body: RegisterRequest):
     Returns 409 if email is already registered.
     Returns 422 if password is shorter than 8 characters (Pydantic validator).
     """
-    # WHY: normalize email before uniqueness check and storage so "Alice@Example.COM"
-    # and "alice@example.com" are treated as the same account.
+    # WHY: normalize email before storage so "Alice@Example.COM" and
+    # "alice@example.com" are treated as the same account.
     email = body.email.strip().lower()
     chess_username = body.chess_username.strip().lower()
-
-    # Pre-check for duplicate email (common case — avoids an unnecessary INSERT)
-    with get_session() as session:
-        existing = session.execute(
-            select(UserRow).where(UserRow.email == email)
-        ).scalar_one_or_none()
-
-    if existing is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered",
-        )
 
     password_hash = hash_password(body.password)
     user = UserRow(
@@ -147,10 +139,7 @@ def login(body: LoginRequest):
         ).scalar_one_or_none()
 
     if user is None:
-        # WHY: dummy bcrypt verify to prevent timing attack — unknown-email path
-        # would otherwise return in microseconds while wrong-password takes ~200ms.
-        # The hash below is a valid bcrypt hash of "dummy" (pre-computed, never matches).
-        _DUMMY_HASH = "$2b$12$e8C8IDoHvxvT91Rb1PW4i.tmH3rd/lx0rjwjxkg.YocnRU77y0F8K"
+        # WHY: dummy bcrypt verify prevents timing attack — see module-level _DUMMY_HASH.
         verify_password(body.password, _DUMMY_HASH)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -177,8 +166,6 @@ def refresh(body: RefreshRequest):
     (stateless JWT — no revocation list in this slice; see design §3).
     Returns 401 for expired, invalid, wrong-type, or orphan-sub tokens.
     """
-    import jwt as pyjwt
-
     try:
         payload = decode_token(body.refresh_token, expected_type="refresh")
     except pyjwt.PyJWTError:
