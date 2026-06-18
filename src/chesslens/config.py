@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     stockfish_path: str = ""
     database_url: str = ""
     reports_dir: Path = Path("./reports")
+    jwt_secret: str = ""
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 7
 
     @property
     def db_url(self) -> str:
