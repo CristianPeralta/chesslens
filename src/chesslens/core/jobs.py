@@ -44,6 +44,7 @@ def generate_report_for_user(username: str, month: str) -> None:
 
     Idempotent: if a ReportRow for (username, month) already exists, returns early.
     Reuses existing GameRow/AnalysisRow cache; only fills gaps.
+    Propagates exceptions — callers own error isolation (batch loop in api.py).
 
     WHY extracted from api.py GET /report: route + scheduler share one code path.
     WHY sync: called via loop.run_in_executor in the scheduler; sync is required
