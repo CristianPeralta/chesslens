@@ -29,6 +29,7 @@ from chesslens.core.renderer import render_game, render_opening, render_report
 from chesslens.core.reporter import generate_narrative
 from chesslens.db.models import AnalysisRow, GameRow, ReportRow
 from chesslens.db.session import get_session, init_db
+from chesslens.delivery.auth import router as auth_router
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 _env = Environment(
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
 # --- app ---
 
 app = FastAPI(title="chesslens", lifespan=lifespan)
+app.include_router(auth_router)
 
 
 # --- global error handler ---
