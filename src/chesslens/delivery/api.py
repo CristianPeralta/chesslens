@@ -4,16 +4,21 @@ Routes mirror delivery/cli.py call chains but accept `username` as a request
 parameter instead of reading settings.username (multi-request isolation).
 
 Start with:
-    uvicorn chesslens.delivery.api:app --reload
+    uvicorn chesslens.delivery.api:app --workers 1 --reload
+    WHY --workers 1: in-process APScheduler; multiple workers would each start
+    a scheduler and trigger duplicate monthly report runs.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -21,6 +26,7 @@ from sqlalchemy import select
 
 from chesslens.core.analyzer import GameAnalysis, analyze_game, analyze_game_detail
 from chesslens.core.fetcher import UserNotFoundError, get_games
+from chesslens.core.jobs import generate_report_for_user
 from chesslens.core.openings import extract_opening_breakdown
 from chesslens.core.parser import Game as DomainGame
 from chesslens.core.parser import parse_games
@@ -31,6 +37,8 @@ from chesslens.db.models import AnalysisRow, GameRow, ReportRow, UserRow
 from chesslens.db.session import get_session, init_db
 from chesslens.delivery.auth import router as auth_router
 from chesslens.delivery.security import get_current_user
+
+logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 _env = Environment(
@@ -61,11 +69,43 @@ def run_async(coro):
 
 # --- lifespan ---
 
+async def _run_monthly_reports() -> None:
+    """Regenerate previous-month reports for every registered user.
+
+    WHY run_in_executor: generate_report_for_user runs Stockfish (sync,
+    CPU-bound) — running it inline would block the event loop / API.
+    """
+    prev = (datetime.now(timezone.utc).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    with get_session() as session:
+        usernames = list(session.execute(
+            select(UserRow.chess_username).distinct()
+        ).scalars().all())
+    loop = asyncio.get_running_loop()
+    for username in usernames:
+        try:
+            # ponytail: run_in_executor is mandatory here (sync Stockfish in async context)
+            await loop.run_in_executor(None, generate_report_for_user, username, prev)
+        except Exception:
+            logger.exception("Failed to generate report for user %r — skipping", username)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the database on startup."""
+    """Initialize the database and start the monthly report scheduler."""
     init_db()
-    yield
+    # ponytail: inline CronTrigger — no config class needed for one cadence
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(
+        _run_monthly_reports,
+        CronTrigger(day=1, hour=0, minute=5, timezone="UTC"),
+        id="monthly_reports",
+        replace_existing=True,
+    )
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 # --- app ---
@@ -216,7 +256,7 @@ def report(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid month format: '{month}'. Use YYYY-MM.")
 
-    # Check cache
+    # Check cache first (fast path)
     with get_session() as session:
         cached = session.execute(
             select(ReportRow)
@@ -227,86 +267,26 @@ def report(
     if cached:
         return HTMLResponse(cached.html)
 
-    # Fetch games
+    # Generate — delegate to shared pipeline in core/jobs.py
+    # WHY no run_in_executor here: route runs in uvicorn's sync threadpool,
+    # which has no running event loop, so calling the sync function directly is safe.
     try:
-        raw_games = run_async(get_games(username, year, mon))
+        generate_report_for_user(username, month)
     except UserNotFoundError:
         raise HTTPException(status_code=404, detail=f"User '{username}' not found on chess.com")
 
-    if not raw_games:
+    # Re-read from DB (generate_report_for_user persists or returns early on no-games)
+    with get_session() as session:
+        row = session.execute(
+            select(ReportRow)
+            .where(ReportRow.username == username)
+            .where(ReportRow.month == month)
+        ).scalar_one_or_none()
+
+    if row is None:
         raise HTTPException(status_code=404, detail=f"No blitz games found for {username} in {month}")
 
-    games = parse_games(raw_games, username)
-
-    # Upsert games to DB
-    with get_session() as session:
-        existing_ids = set(
-            r[0] for r in session.execute(
-                select(GameRow.id).where(GameRow.id.in_([g.id for g in games]))
-            ).all()
-        )
-        for g in games:
-            if g.id not in existing_ids:
-                session.add(GameRow(
-                    id=g.id, username=g.username, played_at=g.played_at,
-                    time_class=g.time_class, color=g.color, result=g.result,
-                    end_reason=g.end_reason, opponent=g.opponent,
-                    player_rating=g.player_rating, opponent_rating=g.opponent_rating,
-                    opening_eco=g.opening_eco, opening_name=g.opening_name,
-                    move_count=g.move_count, pgn=g.pgn,
-                ))
-
-    # Analyze games not yet analyzed
-    with get_session() as session:
-        analyzed_ids = set(
-            r[0] for r in session.execute(
-                select(AnalysisRow.game_id).where(AnalysisRow.game_id.in_([g.id for g in games]))
-            ).all()
-        )
-
-    to_analyze = [g for g in games if g.id not in analyzed_ids]
-    analyses: dict[str, GameAnalysis] = {}
-
-    if to_analyze:
-        with get_session() as session:
-            for g in to_analyze:
-                result = analyze_game(g)
-                if result:
-                    analyses[g.id] = result
-                    session.add(AnalysisRow(
-                        game_id=result.game_id,
-                        accuracy=result.accuracy,
-                        avg_centipawn_loss=result.avg_centipawn_loss,
-                        blunders=result.blunders,
-                        mistakes=result.mistakes,
-                        inaccuracies=result.inaccuracies,
-                        timeout_move=result.timeout_move,
-                    ))
-
-    # Load existing analyses
-    with get_session() as session:
-        for a in session.execute(
-            select(AnalysisRow).where(AnalysisRow.game_id.in_([g.id for g in games]))
-        ).scalars().all():
-            if a.game_id not in analyses:
-                analyses[a.game_id] = GameAnalysis(
-                    game_id=a.game_id, accuracy=a.accuracy,
-                    avg_centipawn_loss=a.avg_centipawn_loss, blunders=a.blunders,
-                    mistakes=a.mistakes, inaccuracies=a.inaccuracies,
-                    timeout_move=a.timeout_move,
-                )
-
-    pattern_report = extract_patterns(games, analyses, month)
-    narrative = generate_narrative(pattern_report)
-    weekly = _weekly_ratings(games)
-    html = render_report(pattern_report, narrative, weekly)
-
-    with get_session() as session:
-        session.add(ReportRow(
-            username=username, month=month, html=html, narrative=narrative,
-        ))
-
-    return HTMLResponse(html)
+    return HTMLResponse(row.html)
 
 
 # 4.4 — Game last  (MUST be declared BEFORE /game/{game_id})

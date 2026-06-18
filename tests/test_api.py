@@ -227,25 +227,18 @@ class TestReportCached:
 # 5.8 — GET /report — cache miss (generate fresh)
 class TestReportCacheMiss:
     def test_report_cache_miss_generates_and_returns_html(self, client, auth_headers):
-        from chesslens.core.parser import Game as DomainGame
+        # WHY patching generate_report_for_user: route now delegates to core/jobs.py;
+        # pipeline internals (get_games, parse_games, …) are tested in test_jobs.py.
+        cached_row = MagicMock()
+        cached_row.html = "<html>report</html>"
 
-        domain_game = MagicMock(spec=DomainGame)
-        domain_game.id = "g1"
+        # First get_session call (cache check) returns None; second (re-read) returns row.
+        miss_ctx = _make_session_ctx(scalar=None)
+        hit_ctx = _make_session_ctx(scalar=cached_row)
+        session_side_effect = [miss_ctx, hit_ctx]
 
-        # Session: no cached report; mark game as already existing so no INSERT is attempted
-        no_cache = _make_session_ctx(rows=[])
-        no_cache.execute.return_value.scalar_one_or_none.return_value = None
-        # all() returns [("g1",)] so existing_ids = {"g1"} — skips GameRow insertion
-        no_cache.execute.return_value.all.return_value = [("g1",)]
-
-        with patch("chesslens.delivery.api.get_session", return_value=no_cache), \
-             patch("chesslens.delivery.api.get_games", return_value=[MagicMock()]), \
-             patch("chesslens.delivery.api.parse_games", return_value=[domain_game]), \
-             patch("chesslens.delivery.api.analyze_game", return_value=None), \
-             patch("chesslens.delivery.api.extract_patterns", return_value=MagicMock()), \
-             patch("chesslens.delivery.api.generate_narrative", return_value="narrative"), \
-             patch("chesslens.delivery.api._weekly_ratings", return_value=[1500]), \
-             patch("chesslens.delivery.api.render_report", return_value="<html>report</html>"):
+        with patch("chesslens.delivery.api.get_session", side_effect=session_side_effect), \
+             patch("chesslens.delivery.api.generate_report_for_user"):
             response = client.get("/report?month=2026-06", headers=auth_headers)
         assert response.status_code == 200
         assert "<html>report</html>" in response.text
@@ -263,11 +256,13 @@ class TestReportUnknownUser:
     def test_report_unknown_user_returns_404(self, client, auth_headers):
         from chesslens.core.fetcher import UserNotFoundError
 
-        no_cache = _make_session_ctx(scalar=None, rows=[])
-        no_cache.execute.return_value.scalar_one_or_none.return_value = None
+        # WHY patching generate_report_for_user: route delegates to core/jobs.py;
+        # UserNotFoundError is raised there and propagated back to the route handler.
+        no_cache = _make_session_ctx(scalar=None)
 
         with patch("chesslens.delivery.api.get_session", return_value=no_cache), \
-             patch("chesslens.delivery.api.get_games", side_effect=UserNotFoundError("alice")):
+             patch("chesslens.delivery.api.generate_report_for_user",
+                   side_effect=UserNotFoundError("alice")):
             response = client.get("/report?month=2026-06", headers=auth_headers)
         assert response.status_code == 404
 

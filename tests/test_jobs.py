@@ -96,14 +96,31 @@ def test_generate_report_for_user_skips_when_already_cached(db_session, monkeypa
 def test_generate_report_for_user_happy_path_inserts_row(db_session, monkeypatch):
     """Happy path: mock pipeline, assert exactly one ReportRow written."""
     from chesslens.core.jobs import generate_report_for_user  # noqa: PLC0415
+    from chesslens.core.parser import Game as DomainGame  # noqa: PLC0415
 
     raw_game = MagicMock()
     raw_game.id = "g1"
 
-    domain_game = MagicMock()
-    domain_game.id = "g1"
+    # WHY real DomainGame fields: GameRow insert requires proper Python types (datetime, str, int).
+    domain_game = DomainGame(
+        id="g1",
+        username="bob",
+        played_at=datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc),
+        time_class="blitz",
+        color="white",
+        result="win",
+        end_reason="checkmate",
+        opponent="eve",
+        player_rating=1500,
+        opponent_rating=1490,
+        opening_eco="B20",
+        opening_name="Sicilian Defense",
+        move_count=30,
+        pgn="[Event ?]\n1. e4 c5",
+    )
 
-    monkeypatch.setattr("chesslens.core.jobs.get_games", MagicMock(return_value=[raw_game]))
+    # WHY AsyncMock: get_games is a coroutine; asyncio.run() needs an awaitable.
+    monkeypatch.setattr("chesslens.core.jobs.get_games", AsyncMock(return_value=[raw_game]))
     monkeypatch.setattr("chesslens.core.jobs.parse_games", MagicMock(return_value=[domain_game]))
     monkeypatch.setattr("chesslens.core.jobs.analyze_game", MagicMock(return_value=None))
     monkeypatch.setattr("chesslens.core.jobs.extract_patterns", MagicMock(return_value=MagicMock()))
@@ -129,7 +146,8 @@ def test_generate_report_for_user_no_games_does_not_raise(db_session, monkeypatc
     """When get_games returns [], no ReportRow is written and no exception raised."""
     from chesslens.core.jobs import generate_report_for_user  # noqa: PLC0415
 
-    monkeypatch.setattr("chesslens.core.jobs.get_games", MagicMock(return_value=[]))
+    # WHY AsyncMock: get_games is a coroutine; asyncio.run() needs an awaitable.
+    monkeypatch.setattr("chesslens.core.jobs.get_games", AsyncMock(return_value=[]))
 
     generate_report_for_user("charlie", "2026-05")  # must not raise
 
