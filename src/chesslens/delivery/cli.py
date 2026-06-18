@@ -1,5 +1,7 @@
 import asyncio
+import http.server
 import tempfile
+import threading
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -489,10 +491,23 @@ def _open_opening_html(html: str, username: str, name: str) -> None:
 
 
 def _open_html(html: str, username: str, month: str) -> None:
-    """Write HTML to reports dir and open in browser."""
-    out_dir = settings.reports_dir
+    """Write HTML to reports dir and open via local HTTP server."""
+    out_dir = settings.reports_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{username}-{month}.html"
+    filename = f"{username}-{month}.html"
+    out_path = out_dir / filename
     out_path.write_text(html, encoding="utf-8")
     console.print(f"[green]Report saved:[/green] {out_path}")
-    webbrowser.open(out_path.as_uri())
+
+    import functools
+
+    class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *args): pass
+
+    handler = functools.partial(_QuietHandler, directory=str(out_dir))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    webbrowser.open(f"http://127.0.0.1:{port}/{filename}")
+    input("\nPress Enter to stop the server...\n")
+    httpd.shutdown()
