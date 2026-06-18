@@ -3,6 +3,7 @@
 WHY: Lives in delivery/ — not core/ — to keep the hexagonal boundary clean.
 Core has zero knowledge of JWT, bcrypt, or FastAPI.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -65,6 +66,9 @@ def create_refresh_token(user: UserRow) -> str:
     payload = {
         "sub": str(user.id),
         "type": "refresh",
+        # WHY jti: guarantees every refresh token is unique even when issued within
+        # the same second — rotation is then always observable by string comparison.
+        "jti": secrets.token_hex(16),
         "iat": now,
         "exp": now + timedelta(days=settings.refresh_token_ttl_days),
     }

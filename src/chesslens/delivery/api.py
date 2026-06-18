@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
@@ -27,8 +27,10 @@ from chesslens.core.parser import parse_games
 from chesslens.core.patterns import extract_patterns
 from chesslens.core.renderer import render_game, render_opening, render_report
 from chesslens.core.reporter import generate_narrative
-from chesslens.db.models import AnalysisRow, GameRow, ReportRow
+from chesslens.db.models import AnalysisRow, GameRow, ReportRow, UserRow
 from chesslens.db.session import get_session, init_db
+from chesslens.delivery.auth import router as auth_router
+from chesslens.delivery.security import get_current_user
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 _env = Environment(
@@ -69,6 +71,7 @@ async def lifespan(app: FastAPI):
 # --- app ---
 
 app = FastAPI(title="chesslens", lifespan=lifespan)
+app.include_router(auth_router)
 
 
 # --- global error handler ---
@@ -127,8 +130,9 @@ def health():
 
 # 4.2 — Stats
 @app.get("/stats", response_class=HTMLResponse)
-def stats(username: str = Query(...)):
-    """Quick stats page — last 30 days from DB for the given username."""
+def stats(current_user: UserRow = Depends(get_current_user)):
+    """Quick stats page — last 30 days from DB for the authenticated user."""
+    username = current_user.chess_username
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
@@ -197,10 +201,11 @@ def stats(username: str = Query(...)):
 # 4.3 — Report
 @app.get("/report", response_class=HTMLResponse)
 def report(
-    username: str = Query(...),
     month: str | None = Query(None),
+    current_user: UserRow = Depends(get_current_user),
 ):
     """Monthly Wrapped report. Checks DB cache before generating."""
+    username = current_user.chess_username
     if month is None:
         month = datetime.now(timezone.utc).strftime("%Y-%m")
 
@@ -306,8 +311,9 @@ def report(
 
 # 4.4 — Game last  (MUST be declared BEFORE /game/{game_id})
 @app.get("/game/last", response_class=HTMLResponse)
-def game_last(username: str = Query(...)):
-    """Return the most recently played game for the given username."""
+def game_last(current_user: UserRow = Depends(get_current_user)):
+    """Return the most recently played game for the authenticated user."""
+    username = current_user.chess_username
     with get_session() as session:
         game_row = session.execute(
             select(GameRow)
@@ -330,14 +336,19 @@ def game_last(username: str = Query(...)):
 
 # 4.5 — Game by ID  (MUST be declared AFTER /game/last)
 @app.get("/game/{game_id}", response_class=HTMLResponse)
-def game_by_id(game_id: str):
-    """Return the analysis for a specific game by its chess.com ID."""
+def game_by_id(game_id: str, current_user: UserRow = Depends(get_current_user)):
+    """Return the analysis for a specific game by its chess.com ID.
+
+    WHY 404 not 403: returning 404 avoids leaking that a game exists for
+    another user. The caller should not know whether the game id is valid
+    or simply inaccessible.
+    """
     with get_session() as session:
         game_row = session.execute(
             select(GameRow).where(GameRow.id == game_id)
         ).scalar_one_or_none()
 
-    if game_row is None:
+    if game_row is None or game_row.username != current_user.chess_username:
         raise HTTPException(status_code=404, detail=f"Game '{game_id}' not found")
 
     domain_game = _row_to_domain(game_row)
@@ -351,8 +362,9 @@ def game_by_id(game_id: str):
 
 # 4.6 — Opening breakdown
 @app.get("/opening/{name}", response_class=HTMLResponse)
-def opening(name: str, username: str = Query(...)):
-    """Return an opening breakdown for the given opening name and username."""
+def opening(name: str, current_user: UserRow = Depends(get_current_user)):
+    """Return an opening breakdown for the authenticated user."""
+    username = current_user.chess_username
     with get_session() as session:
         rows = session.execute(
             select(GameRow).where(GameRow.username == username)

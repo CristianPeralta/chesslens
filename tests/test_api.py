@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from starlette.testclient import TestClient
 
 # --- helpers ---
@@ -71,16 +74,71 @@ def _make_session_ctx(rows=None, scalar=_UNSET):
 # --- fixtures ---
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """TestClient with a temp SQLite DB and init_db patched."""
-    db_path = tmp_path / "test.db"
-    monkeypatch.setenv("CHESSLENS_DB_URL", f"sqlite:///{db_path}")
+def db_engine():
+    """In-memory SQLite with all tables (including users).
 
-    # Patch init_db so lifespan does not try to create real tables
+    WHY StaticPool + check_same_thread=False: TestClient runs routes in a
+    separate thread; StaticPool forces all connections to share the same
+    in-memory database so auth rows seeded in fixtures are visible inside
+    route handlers (including get_current_user in security.py).
+    """
+    from chesslens.db.models import Base
+
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture()
+def client(db_engine, monkeypatch):
+    """TestClient with a shared in-memory DB, JWT secret set, init_db patched.
+
+    WHY monkeypatching SessionLocal: get_current_user (in security.py) calls
+    get_session() which uses SessionLocal from db/session.py. Patching
+    SessionLocal ensures auth token lookups go to the same in-memory DB
+    used by the auth fixtures, while individual test mocks on
+    chesslens.delivery.api.get_session still work for data routes.
+    """
+    import chesslens.db.session as session_module
+
+    test_factory = sessionmaker(bind=db_engine, expire_on_commit=False)
+    monkeypatch.setattr(session_module, "SessionLocal", test_factory)
+    monkeypatch.setattr("chesslens.delivery.security.settings.jwt_secret", "test-secret-32-chars-long-padded!")
+    monkeypatch.setattr("chesslens.delivery.security.settings.access_token_ttl_minutes", 15)
+    monkeypatch.setattr("chesslens.delivery.security.settings.refresh_token_ttl_days", 7)
+
     with patch("chesslens.delivery.api.init_db"):
         from chesslens.delivery.api import app
         with TestClient(app) as c:
             yield c
+
+
+@pytest.fixture()
+def auth_headers(client):
+    """Register alice and return Authorization headers for her.
+
+    Uses chess_username="alice" so existing test data (game rows with
+    username="alice") stays valid. Function-scoped (safest with in-memory DB).
+    """
+    client.post(
+        "/auth/register",
+        json={
+            "email": "alice@example.com",
+            "password": "secret123",
+            "chess_username": "alice",
+        },
+    )
+    resp = client.post(
+        "/auth/login",
+        json={"email": "alice@example.com", "password": "secret123"},
+    )
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 # ===================================================================
@@ -140,35 +198,35 @@ class TestRunAsync:
 
 # 5.5 — GET /stats happy path
 class TestStats:
-    def test_stats_happy_path_returns_200_html(self, client):
+    def test_stats_happy_path_returns_200_html(self, client, auth_headers):
         rows = [_make_game_row(id=f"g{i}", username="alice") for i in range(3)]
         session_ctx = _make_session_ctx(rows=rows, scalar=rows[0])
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = client.get("/stats?username=alice")
+            response = client.get("/stats", headers=auth_headers)
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    # 5.6 — missing username → 422
-    def test_stats_missing_username_returns_422(self, client):
+    # 5.6 — missing token → 401 (was: missing username → 422)
+    def test_stats_missing_token_returns_401(self, client):
         response = client.get("/stats")
-        assert response.status_code == 422
+        assert response.status_code == 401
 
 
 # 5.7 — GET /report — cached
 class TestReportCached:
-    def test_report_cached_returns_200_with_cached_html(self, client):
+    def test_report_cached_returns_200_with_cached_html(self, client, auth_headers):
         cached_row = MagicMock()
         cached_row.html = "<html>cached</html>"
         session_ctx = _make_session_ctx(scalar=cached_row)
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = client.get("/report?username=alice&month=2026-05")
+            response = client.get("/report?month=2026-05", headers=auth_headers)
         assert response.status_code == 200
         assert "cached" in response.text
 
 
 # 5.8 — GET /report — cache miss (generate fresh)
 class TestReportCacheMiss:
-    def test_report_cache_miss_generates_and_returns_html(self, client):
+    def test_report_cache_miss_generates_and_returns_html(self, client, auth_headers):
         from chesslens.core.parser import Game as DomainGame
 
         domain_game = MagicMock(spec=DomainGame)
@@ -188,21 +246,21 @@ class TestReportCacheMiss:
              patch("chesslens.delivery.api.generate_narrative", return_value="narrative"), \
              patch("chesslens.delivery.api._weekly_ratings", return_value=[1500]), \
              patch("chesslens.delivery.api.render_report", return_value="<html>report</html>"):
-            response = client.get("/report?username=alice&month=2026-06")
+            response = client.get("/report?month=2026-06", headers=auth_headers)
         assert response.status_code == 200
         assert "<html>report</html>" in response.text
 
 
 # 5.9 — GET /report — bad month format → 400
 class TestReportBadMonth:
-    def test_report_bad_month_returns_400(self, client):
-        response = client.get("/report?username=alice&month=not-a-date")
+    def test_report_bad_month_returns_400(self, client, auth_headers):
+        response = client.get("/report?month=not-a-date", headers=auth_headers)
         assert response.status_code == 400
 
 
 # 5.10 — GET /report — unknown user → 404
 class TestReportUnknownUser:
-    def test_report_unknown_user_returns_404(self, client):
+    def test_report_unknown_user_returns_404(self, client, auth_headers):
         from chesslens.core.fetcher import UserNotFoundError
 
         no_cache = _make_session_ctx(scalar=None, rows=[])
@@ -210,54 +268,56 @@ class TestReportUnknownUser:
 
         with patch("chesslens.delivery.api.get_session", return_value=no_cache), \
              patch("chesslens.delivery.api.get_games", side_effect=UserNotFoundError("alice")):
-            response = client.get("/report?username=alice&month=2026-06")
+            response = client.get("/report?month=2026-06", headers=auth_headers)
         assert response.status_code == 404
 
 
 # 5.11 — GET /game/last — happy path
 class TestGameLast:
-    def test_game_last_returns_200_html(self, client):
+    def test_game_last_returns_200_html(self, client, auth_headers):
         game_row = _make_game_row(id="last1", username="alice")
         session_ctx = _make_session_ctx(scalar=game_row)
 
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx), \
              patch("chesslens.delivery.api.analyze_game_detail", return_value=MagicMock()), \
              patch("chesslens.delivery.api.render_game", return_value="<html>game</html>"):
-            response = client.get("/game/last?username=alice")
+            response = client.get("/game/last", headers=auth_headers)
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
     # 5.12 — no games → 404
-    def test_game_last_no_games_returns_404(self, client):
+    def test_game_last_no_games_returns_404(self, client, auth_headers):
         session_ctx = _make_session_ctx(scalar=None)
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = client.get("/game/last?username=nobody")
+            response = client.get("/game/last", headers=auth_headers)
         assert response.status_code == 404
 
 
 # 5.13 — GET /game/{game_id} — found
 class TestGameById:
-    def test_game_by_id_returns_200(self, client):
+    def test_game_by_id_returns_200(self, client, auth_headers):
+        # WHY username="alice": get_current_user resolves chess_username="alice"
+        # (from the registered user), and the route now checks game.username == alice.
         game_row = _make_game_row(id="abc123", username="alice")
         session_ctx = _make_session_ctx(scalar=game_row)
 
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx), \
              patch("chesslens.delivery.api.analyze_game_detail", return_value=MagicMock()), \
              patch("chesslens.delivery.api.render_game", return_value="<html>game</html>"):
-            response = client.get("/game/abc123")
+            response = client.get("/game/abc123", headers=auth_headers)
         assert response.status_code == 200
 
     # 5.14 — not found → 404
-    def test_game_by_id_not_found_returns_404(self, client):
+    def test_game_by_id_not_found_returns_404(self, client, auth_headers):
         session_ctx = _make_session_ctx(scalar=None)
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = client.get("/game/missing")
+            response = client.get("/game/missing", headers=auth_headers)
         assert response.status_code == 404
 
 
 # 5.15 — GET /opening/{name} — found
 class TestOpening:
-    def test_opening_found_returns_200(self, client):
+    def test_opening_found_returns_200(self, client, auth_headers):
         rows = [_make_game_row(id=f"g{i}", username="alice", opening_name="Sicilian Defense") for i in range(5)]
         session_ctx = _make_session_ctx(rows=rows)
         breakdown = MagicMock()
@@ -265,30 +325,30 @@ class TestOpening:
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx), \
              patch("chesslens.delivery.api.extract_opening_breakdown", return_value=breakdown), \
              patch("chesslens.delivery.api.render_opening", return_value="<html>opening</html>"):
-            response = client.get("/opening/Sicilian%20Defense?username=alice")
+            response = client.get("/opening/Sicilian%20Defense", headers=auth_headers)
         assert response.status_code == 200
 
     # 5.16 — not found → 404
-    def test_opening_not_found_returns_404(self, client):
+    def test_opening_not_found_returns_404(self, client, auth_headers):
         rows = [_make_game_row(id=f"g{i}", username="alice") for i in range(3)]
         session_ctx = _make_session_ctx(rows=rows)
 
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx), \
              patch("chesslens.delivery.api.extract_opening_breakdown", return_value=None):
-            response = client.get("/opening/Kings%20Gambit?username=alice")
+            response = client.get("/opening/Kings%20Gambit", headers=auth_headers)
         assert response.status_code == 404
 
 
-# 5.17 — Username isolation (no route reads settings.username)
+# 5.17 — Username isolation (route scopes by token, not by query param)
 class TestUsernameIsolation:
-    def test_report_uses_request_username_not_settings(self, client):
-        """Route must use 'alice' from query param — patching settings is not needed."""
+    def test_report_uses_token_username_not_query_param(self, client, auth_headers):
+        """Route must use current_user.chess_username from token — not a query param."""
         cached_row = MagicMock()
         cached_row.html = "<html>alice-data</html>"
         session_ctx = _make_session_ctx(scalar=cached_row)
 
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = client.get("/report?username=alice&month=2026-05")
+            response = client.get("/report?month=2026-05", headers=auth_headers)
         assert response.status_code == 200
         assert "alice-data" in response.text
 
