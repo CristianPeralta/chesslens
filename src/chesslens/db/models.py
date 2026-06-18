@@ -1,12 +1,11 @@
 """SQLAlchemy 2.0 ORM models for chesslens.
 
 WHY: Uses DeclarativeBase + Mapped[] (SQLAlchemy 2.0 style) for type-safe
-column declarations without runtime magic. No Alembic yet — create_all()
-is sufficient for Phase 1.
+column declarations without runtime magic. Alembic manages schema migrations.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -73,3 +72,20 @@ class ReportRow(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     __table_args__ = (UniqueConstraint("username", "month"),)
+
+
+class UserRow(Base):
+    """Registered chesslens account. Identity (email) drives data scope (chess_username)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # WHY: email stored lowercased at write time so the unique index is effectively
+    # case-insensitive without a functional index (portable across SQLite + PostgreSQL).
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    chess_username: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )

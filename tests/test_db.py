@@ -348,3 +348,70 @@ def test_get_session_rollback_on_exception(db_engine):
             assert result is None
     finally:
         db_session_module.SessionLocal = original_factory
+
+
+# ---------------------------------------------------------------------------
+# Task 2.1 — UserRow model
+# ---------------------------------------------------------------------------
+
+
+def test_userrow_table_name_is_users():
+    """UserRow.__tablename__ must be 'users'."""
+    from chesslens.db.models import UserRow
+
+    assert UserRow.__tablename__ == "users"
+
+
+def test_userrow_has_required_columns(db_engine):
+    """UserRow can be inserted and retrieved with all fields intact."""
+    from chesslens.db.models import UserRow
+
+    now = datetime.now(timezone.utc)
+    user = UserRow(
+        email="alice@example.com",
+        password_hash="$2b$12$fakehash",
+        chess_username="alice_chess",
+        created_at=now,
+    )
+    with Session(bind=db_engine) as session:
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        fetched_id = user.id
+
+    with Session(bind=db_engine) as session:
+        fetched = session.get(UserRow, fetched_id)
+        assert fetched is not None
+        assert fetched.email == "alice@example.com"
+        assert fetched.password_hash == "$2b$12$fakehash"
+        assert fetched.chess_username == "alice_chess"
+        assert fetched.id is not None
+
+
+def test_userrow_email_unique_constraint(db_engine):
+    """UserRow email must be unique — duplicate email raises IntegrityError."""
+    from sqlalchemy.exc import IntegrityError
+
+    from chesslens.db.models import UserRow
+
+    now = datetime.now(timezone.utc)
+    u1 = UserRow(
+        email="bob@example.com",
+        password_hash="$2b$12$hash1",
+        chess_username="bob_chess",
+        created_at=now,
+    )
+    u2 = UserRow(
+        email="bob@example.com",
+        password_hash="$2b$12$hash2",
+        chess_username="bob_chess2",
+        created_at=now,
+    )
+    with Session(bind=db_engine) as session:
+        session.add(u1)
+        session.commit()
+
+    with Session(bind=db_engine) as session:
+        session.add(u2)
+        with pytest.raises(IntegrityError):
+            session.commit()
