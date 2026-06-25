@@ -12,21 +12,48 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   chesslens:
     build: .
     image: chesslens
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn chesslens.delivery.api:app
+             --host 0.0.0.0 --port 8000 --workers 1"
     env_file:
       - path: .env
         required: false
     environment:
       CHESSLENS_DATABASE_URL: postgresql+psycopg://chesslens:chesslens@postgres:5432/chesslens
+      CHESSLENS_JWT_SECRET: ${CHESSLENS_JWT_SECRET:?set CHESSLENS_JWT_SECRET in .env}
+      CHESSLENS_MODEL: ${CHESSLENS_MODEL:-gemini/gemini-2.5-pro}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    expose:
+      - "8000"
     volumes:
-      - ${HOME}/.chesslens:/root/.chesslens  # config and DB persistence
       - ./reports:/app/reports               # generated HTML reports
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - chesslens
+    restart: unless-stopped
 
 volumes:
   chesslens_pgdata:
+  caddy_data:
+  caddy_config:
