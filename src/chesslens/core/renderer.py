@@ -1,6 +1,7 @@
 """Jinja2 HTML renderer for report templates."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import markdown as md
@@ -45,18 +46,40 @@ def render_report(report: PatternReport, narrative: str, weekly_ratings: list[in
 def render_game(detail: GameDetailAnalysis, game: Game) -> str:
     """Render a single-game analysis to an HTML string."""
     template = _env.get_template("game.html")
+
+    replay_errors = sorted(
+        [
+            {
+                "fen": e.fen,
+                "san": e.san,
+                "centipawn_loss": e.centipawn_loss,
+                "severity": e.severity,
+                "remaining_clock_at_ply": e.remaining_clock_at_ply,
+            }
+            for e in detail.top_errors
+        ],
+        key=lambda x: x["centipawn_loss"],
+        reverse=True,
+    )
+    replay_json = json.dumps(
+        {"pgn": game.pgn, "player_color": game.color, "errors": replay_errors}
+    )
+
     return template.render(
         detail=detail,
         game=game,
         eval_labels=list(range(len(detail.eval_sequence))),
         eval_data=detail.eval_sequence,
         top_errors=detail.top_errors,
+        replay_json=replay_json,
+        replay_errors=replay_errors,
+        replay_pgn=game.pgn,
     )
 
 
 def render_opening(breakdown: "OpeningBreakdown") -> str:  # noqa: F821
     """Render an opening breakdown to an HTML string."""
-    from chesslens.core.openings import OpeningBreakdown  # local import to avoid circular
+    from chesslens.core.openings import OpeningBreakdown  # noqa: F401  # local import to avoid circular
     template = _env.get_template("opening.html")
     variant_names = [v.name for v in breakdown.variants]
     variant_winrates = [round(v.win_rate * 100, 1) for v in breakdown.variants]

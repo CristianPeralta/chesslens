@@ -44,6 +44,8 @@ class MoveError:
     centipawn_loss: int
     best_line: list[str]
     severity: str
+    fen: str | None = None
+    remaining_clock_at_ply: int | None = None
 
 
 @dataclass
@@ -265,6 +267,8 @@ def analyze_game_detail(
                                 centipawn_loss=cpl,
                                 best_line=best_line,
                                 severity=_severity(cpl),
+                                fen=board_before.fen(),
+                                remaining_clock_at_ply=extract_clock(node.comment),
                             ))
 
                 prev_infos = curr_infos
