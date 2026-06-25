@@ -115,6 +115,7 @@ def generate_report_for_user(username: str, month: str) -> None:
                         mistakes=result.mistakes,
                         inaccuracies=result.inaccuracies,
                         timeout_move=result.timeout_move,
+                        remaining_clock=result.remaining_clock,
                     ))
 
     # --- load existing analyses ---
@@ -129,7 +130,7 @@ def generate_report_for_user(username: str, month: str) -> None:
                     game_id=a.game_id, accuracy=a.accuracy,
                     avg_centipawn_loss=a.avg_centipawn_loss, blunders=a.blunders,
                     mistakes=a.mistakes, inaccuracies=a.inaccuracies,
-                    timeout_move=a.timeout_move,
+                    timeout_move=a.timeout_move, remaining_clock=a.remaining_clock,
                 )
 
     pattern_report = extract_patterns(games, analyses, month)
