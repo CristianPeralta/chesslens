@@ -73,6 +73,7 @@ def render_game(detail: GameDetailAnalysis, game: Game) -> str:
         top_errors=detail.top_errors,
         replay_json=replay_json,
         replay_errors=replay_errors,
+        replay_pgn=game.pgn,
     )
 
 
