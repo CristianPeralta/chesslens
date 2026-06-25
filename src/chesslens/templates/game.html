@@ -3,6 +3,8 @@
 {% block title %}chesslens — game {{ game.id }}{% endblock %}
 
 {% block head %}
+<link rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/cm-chessboard@8.7.4/assets/chessboard.css">
 <style>
   .result-header {
     display: flex;
@@ -33,17 +35,56 @@
   .clock-value { font-size: 1.75rem; font-weight: 700; }
   .clock-label { color: #a0a0a0; font-size: 0.85rem; margin-top: 0.25rem; }
 
-  .replay-btn {
-    display: inline-block;
-    margin-top: 1rem;
-    padding: 0.5rem 1.25rem;
+  /* Replay section */
+  #replay-section { margin-top: 1.5rem; }
+  #replay-board { width: 400px; height: 400px; display: block; }
+  #replay-controls {
+    display: flex;
+    flex-direction: row;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 0.75rem;
+  }
+  #clock-display {
+    font-family: monospace;
+    font-size: 1.5rem;
+    display: none;
+    margin-left: auto;
+  }
+  #error-nav { display: flex; flex-direction: row; gap: 0.5rem; }
+  #hint-panel { margin-top: 1rem; display: flex; flex-direction: column; }
+  #hint-text { margin-top: 0.5rem; font-style: italic; min-height: 1.4rem; color: #a0a0a0; }
+  .hint-btn {
+    cursor: pointer;
+    padding: 0.4rem 1rem;
     border: 1px solid #2a2a2a;
     border-radius: 8px;
     background: #1a1a1a;
-    color: #606060;
-    cursor: not-allowed;
+    color: #e8e8e8;
+    font-size: 0.9rem;
+    width: fit-content;
+  }
+  .hint-btn:disabled { color: #606060; cursor: not-allowed; }
+  #replay-controls button {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    background: #1a1a1a;
+    color: #e8e8e8;
+    cursor: pointer;
     font-size: 0.9rem;
   }
+  #replay-controls button:disabled { color: #606060; cursor: not-allowed; }
+  .error-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .error-badge-blunder  { background: #450a0a; color: #f87171; }
+  .error-badge-mistake  { background: #451a03; color: #fbbf24; }
+  .error-badge-inaccuracy { background: #1e3a5f; color: #60a5fa; }
 </style>
 {% endblock %}
 
@@ -132,9 +173,20 @@
     <p style="color:#a0a0a0;">No significant errors detected.</p>
     {% endif %}
 
-    <button class="replay-btn" disabled title="Coming in Phase 2">
-      Replay from blunder
-    </button>
+    <div id="replay-section">
+      <h3 style="margin-top: 1.5rem; margin-bottom: 1rem; font-size: 1.1rem; color: #e8e8e8;">Replay from blunder</h3>
+      <div id="replay-board"></div>
+      <div id="replay-controls">
+        <button id="btn-prev">&#9664; Prev</button>
+        <span id="error-indicator"></span>
+        <button id="btn-next">Next &#9654;</button>
+        <span id="clock-display"></span>
+      </div>
+      <div id="hint-panel">
+        <button id="btn-hint" class="hint-btn">Hint</button>
+        <div id="hint-text"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -193,6 +245,263 @@ new Chart(document.getElementById("evalChart"), {
       }
     }
   }
+});
+</script>
+
+<script type="module">
+import { Chessboard, INPUT_EVENT_TYPE, COLOR } from
+  "https://cdn.jsdelivr.net/npm/cm-chessboard@8.7.4/src/Chessboard.js";
+import { Chess } from
+  "https://cdn.jsdelivr.net/npm/chess.js@1.0.0/dist/esm/chess.js";
+
+// ── Stockfish lazy worker ────────────────────────────────────────────────────
+let sfWorker = null;
+function getStockfish() {
+  if (!sfWorker) {
+    sfWorker = new Worker(
+      "https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js"
+    );
+    sfWorker.postMessage("uci");
+  }
+  return sfWorker;
+}
+
+// ── State ────────────────────────────────────────────────────────────────────
+const errors = replayData.errors;
+const playerColor = replayData.player_color;
+
+let board = null;
+let chess = null;
+let currentErrorIndex = 0;
+let clockTimer = null;
+let clockSeconds = 0;
+let hintLevel = 0;
+let bestmoveUci = null;   // cached from Stockfish response
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function formatClock(s) {
+  return (
+    String(Math.floor(s / 60)).padStart(2, "0") +
+    ":" +
+    String(s % 60).padStart(2, "0")
+  );
+}
+
+function severityBadgeClass(severity) {
+  if (severity === "blunder")   return "error-badge error-badge-blunder";
+  if (severity === "mistake")   return "error-badge error-badge-mistake";
+  return "error-badge error-badge-inaccuracy";
+}
+
+// ── L1 hint: qualitative from centipawn loss ─────────────────────────────────
+function hintL1(cpl) {
+  if (cpl >= 300) return "You missed a much stronger move — the position was better than you played.";
+  if (cpl >= 100) return "There was a clearly better option here.";
+  return "A small improvement was available.";
+}
+
+// ── L2 hint: descriptive from UCI move + chess.js board state ────────────────
+function hintL2(uciMove, chessInstance) {
+  const from = uciMove.slice(0, 2);
+  const to   = uciMove.slice(2, 4);
+  const piece = chessInstance.get(from);
+  if (!piece) return "A strong move is available.";
+  const names = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+  const name = names[piece.type];
+  const fromFile = from.charCodeAt(0) - 97;
+  const toFile   = to.charCodeAt(0)   - 97;
+  const toRank   = parseInt(to[1]);
+  const centerFiles = [2, 3, 4, 5]; // c, d, e, f
+  const centerRanks = [3, 4, 5, 6]; // ranks 3-6
+  const isCenter = centerFiles.includes(toFile) && centerRanks.includes(toRank);
+  const side = toFile > fromFile ? "kingside" : toFile < fromFile ? "queenside" : "forward";
+  if (chessInstance.get(to)) return `Look for a capture with your ${name}.`;
+  if (piece.type === "p" && isCenter) return "A pawn push toward the center looks strong.";
+  if (piece.type === "p") return `A pawn advance on the ${side} looks useful.`;
+  if (
+    (piece.type === "n" || piece.type === "b") &&
+    (from[1] === "1" || from[1] === "8")
+  ) return `Developing a ${name} looks promising.`;
+  if (piece.type === "k" && Math.abs(toFile - fromFile) === 2)
+    return "King safety matters — consider castling.";
+  if (isCenter) return `A ${name} move toward the center looks strong.`;
+  return `A ${name} move to the ${side} looks promising.`;
+}
+
+// ── L3 hint: exact SAN ───────────────────────────────────────────────────────
+function hintL3(error, uciMove) {
+  // Prefer best_line[0] if available
+  if (error.best_line && error.best_line.length > 0) {
+    return "Best move: " + error.best_line[0];
+  }
+  // Fallback: convert UCI to SAN via chess.js
+  if (uciMove) {
+    const from = uciMove.slice(0, 2);
+    const to   = uciMove.slice(2, 4);
+    const c = new Chess(error.fen);
+    const m = c.move({ from, to, promotion: "q" });
+    return "Best move: " + (m ? m.san : uciMove);
+  }
+  return "Best move: (unavailable)";
+}
+
+// ── Clock ────────────────────────────────────────────────────────────────────
+function stopClock() {
+  clearInterval(clockTimer);
+  clockTimer = null;
+}
+
+function startClock(seconds) {
+  const el = document.getElementById("clock-display");
+  clockSeconds = seconds;
+  el.style.display = "inline";
+  el.textContent = formatClock(clockSeconds);
+  clockTimer = setInterval(() => {
+    clockSeconds = Math.max(0, clockSeconds - 1);
+    el.textContent = formatClock(clockSeconds);
+    if (clockSeconds === 0) stopClock();
+  }, 1000);
+}
+
+function resetClock(error) {
+  stopClock();
+  const el = document.getElementById("clock-display");
+  if (error.remaining_clock_at_ply != null) {
+    startClock(error.remaining_clock_at_ply);
+  } else {
+    el.style.display = "none";
+  }
+}
+
+// ── Hint panel ───────────────────────────────────────────────────────────────
+function resetHint() {
+  hintLevel = 0;
+  bestmoveUci = null;
+  const btn  = document.getElementById("btn-hint");
+  const text = document.getElementById("hint-text");
+  btn.textContent = "Hint";
+  btn.disabled = false;
+  text.textContent = "";
+}
+
+// ── Error loader ─────────────────────────────────────────────────────────────
+function loadError(i) {
+  const error = errors[i];
+
+  // Update board position
+  board.setPosition(error.fen, true);
+  chess = new Chess(error.fen);
+
+  // Clock
+  resetClock(error);
+
+  // Hint
+  resetHint();
+
+  // Error indicator
+  const moveNum = Math.floor(error.ply / 2) + 1;
+  const indicator = document.getElementById("error-indicator");
+  indicator.innerHTML =
+    `Move ${moveNum} &nbsp; <span class="${severityBadgeClass(error.severity)}">${error.severity}</span>`;
+
+  // Nav buttons
+  document.getElementById("btn-prev").disabled = (i === 0);
+  document.getElementById("btn-next").disabled = (i === errors.length - 1);
+}
+
+// ── Move input handler ───────────────────────────────────────────────────────
+function inputHandler(event) {
+  if (event.type !== INPUT_EVENT_TYPE.validateMoveInput) return;
+  const result = chess.move({
+    from: event.squareFrom,
+    to:   event.squareTo,
+    promotion: "q",
+  });
+  if (!result) return false;  // illegal — board snaps back
+  stopClock();                // pause clock on move
+  return true;
+}
+
+// ── Hint button ──────────────────────────────────────────────────────────────
+document.getElementById("btn-hint").addEventListener("click", () => {
+  const error = errors[currentErrorIndex];
+  const btn   = document.getElementById("btn-hint");
+  const text  = document.getElementById("hint-text");
+
+  if (hintLevel === 0) {
+    text.textContent = hintL1(error.centipawn_loss);
+    hintLevel = 1;
+    btn.textContent = "Go deeper";
+  } else if (hintLevel === 1) {
+    // Request L2 from Stockfish
+    text.textContent = "Analyzing…";
+    btn.disabled = true;
+    const sf = getStockfish();
+    let lastPvMove = null;
+    sf.onmessage = (evt) => {
+      const msg = typeof evt === "string" ? evt : evt.data;
+      // Capture last info line with pv
+      const pvMatch = msg.match(/info .* pv ([a-h][1-8][a-h][1-8]\S*)/);
+      if (pvMatch) lastPvMove = pvMatch[1];
+      // bestmove signals done
+      if (msg.startsWith("bestmove")) {
+        const bmMatch = msg.match(/bestmove ([a-h][1-8][a-h][1-8]\S*)/);
+        if (bmMatch) bestmoveUci = bmMatch[1];
+        else if (lastPvMove) bestmoveUci = lastPvMove;
+        // Build a fresh Chess instance at the error FEN (our chess instance may have moves)
+        const freshChess = new Chess(error.fen);
+        text.textContent = hintL2(bestmoveUci, freshChess);
+        hintLevel = 2;
+        btn.textContent = "Show move";
+        btn.disabled = false;
+      }
+    };
+    sf.postMessage("ucinewgame");
+    sf.postMessage("position fen " + error.fen);
+    sf.postMessage("go depth 12");
+  } else if (hintLevel === 2) {
+    text.textContent = hintL3(error, bestmoveUci);
+    hintLevel = 3;
+    btn.disabled = true;
+  }
+});
+
+// ── Nav buttons ──────────────────────────────────────────────────────────────
+document.getElementById("btn-prev").addEventListener("click", () => {
+  if (currentErrorIndex > 0) {
+    currentErrorIndex--;
+    loadError(currentErrorIndex);
+  }
+});
+
+document.getElementById("btn-next").addEventListener("click", () => {
+  if (currentErrorIndex < errors.length - 1) {
+    currentErrorIndex++;
+    loadError(currentErrorIndex);
+  }
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+  const section = document.getElementById("replay-section");
+
+  if (!errors || errors.length === 0) {
+    section.style.display = "none";
+    return;
+  }
+
+  const orientation = playerColor === "white" ? COLOR.white : COLOR.black;
+
+  board = new Chessboard(document.getElementById("replay-board"), {
+    position:   errors[0].fen,
+    assetsUrl:  "https://cdn.jsdelivr.net/npm/cm-chessboard@8.7.4/assets/",
+    orientation: orientation,
+  });
+
+  board.enableMoveInput(inputHandler);
+
+  chess = new Chess(errors[0].fen);
+  loadError(0);
 });
 </script>
 {% endblock %}
