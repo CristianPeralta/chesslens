@@ -44,11 +44,12 @@
 
   .chart-wrap { position: relative; height: 220px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 {% endblock %}
 
 {% block content %}
 <!-- Header -->
-<div class="card" style="margin-bottom: 2rem;">
+<div class="card" id="report-card" style="margin-bottom: 2rem;">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem;">
     <div>
       <h1>♟ {{ username }}</h1>
@@ -72,6 +73,12 @@
          onmouseover="this.style.color='#fff';this.style.borderColor='#888';"
          onmouseout="this.style.color='#a0a0a0';this.style.borderColor='#444';">
         ↓ Download
+      </a>
+      <a id="share-btn"
+         style="font-size:0.8rem; color:#a0a0a0; text-decoration:none; border:1px solid #444; padding:0.25rem 0.7rem; border-radius:6px; cursor:pointer;"
+         onmouseover="this.style.color='#fff';this.style.borderColor='#888';"
+         onmouseout="this.style.color='#a0a0a0';this.style.borderColor='#444';">
+        ⬆ Share as image
       </a>
     </div>
   </div>
@@ -232,5 +239,24 @@ new Chart(document.getElementById("openingChart"), {
   }
 });
 document.getElementById('download-btn').href = window.location.href;
+
+// ponytail: inline handler — mirrors existing download-btn wiring
+document.getElementById('share-btn').addEventListener('click', function () {
+  const btn = this;
+  const original = btn.textContent;
+  btn.textContent = 'Generating…';
+  btn.style.pointerEvents = 'none';
+  html2canvas(document.getElementById('report-card'), { backgroundColor: '#1a1a1a' })
+    .then(function (canvas) {
+      const a = document.createElement('a');
+      a.href = canvas.toDataURL('image/png');
+      a.download = 'chesslens-report-{{ month }}.png';
+      a.click();
+    })
+    .finally(function () {
+      btn.textContent = original;
+      btn.style.pointerEvents = 'auto';
+    });
+});
 </script>
 {% endblock %}
