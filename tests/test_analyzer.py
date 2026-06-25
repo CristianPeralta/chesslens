@@ -3,15 +3,15 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import chess
-import chess.engine
 import pytest
 
 from chesslens.core.analyzer import (
-    DEFAULT_DEPTH,
     GameAnalysis,
+    MoveError,
     _accuracy,
     _find_stockfish,
     analyze_game,
+    analyze_game_detail,
 )
 from chesslens.core.parser import Game
 
@@ -123,6 +123,157 @@ def test_analyze_game_no_timeout_move(blitz_game):
 
     assert result is not None
     assert result.timeout_move is None
+
+
+# --- MoveError field tests (tasks 1.1 / 1.2) ---
+
+def test_move_error_has_fen_field():
+    """Task 1.1: MoveError must expose a fen field."""
+    error = MoveError(
+        ply=1,
+        san="e4",
+        eval_before=20,
+        eval_after=-50,
+        centipawn_loss=70,
+        best_line=[],
+        severity="inaccuracy",
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    )
+    assert error.fen == "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+
+def test_move_error_fen_defaults_to_none():
+    """Task 1.2a: MoveError.fen must default to None."""
+    error = MoveError(
+        ply=1,
+        san="e4",
+        eval_before=20,
+        eval_after=-50,
+        centipawn_loss=70,
+        best_line=[],
+        severity="inaccuracy",
+    )
+    assert error.fen is None
+
+
+def test_move_error_remaining_clock_at_ply_int():
+    """Task 1.2b: MoveError.remaining_clock_at_ply must accept an int."""
+    error = MoveError(
+        ply=1,
+        san="e4",
+        eval_before=20,
+        eval_after=-50,
+        centipawn_loss=70,
+        best_line=[],
+        severity="inaccuracy",
+        remaining_clock_at_ply=180,
+    )
+    assert error.remaining_clock_at_ply == 180
+
+
+def test_move_error_remaining_clock_at_ply_none():
+    """Task 1.2c: MoveError.remaining_clock_at_ply must default to None."""
+    error = MoveError(
+        ply=1,
+        san="e4",
+        eval_before=20,
+        eval_after=-50,
+        centipawn_loss=70,
+        best_line=[],
+        severity="inaccuracy",
+    )
+    assert error.remaining_clock_at_ply is None
+
+
+# --- analyze_game_detail FEN population (task 1.4 / 1.5 / 1.6) ---
+
+CLK_PGN = open("tests/fixtures/game_with_clk.pgn").read()
+
+
+def _make_score_mock(cp_value: int) -> MagicMock:
+    """Helper: build a mock info dict with a fixed centipawn score."""
+    score = MagicMock()
+    score.white.return_value.score.return_value = cp_value
+    return {"score": score, "pv": []}
+
+
+def _build_engine_mock(call_count_scores: list[int]) -> MagicMock:
+    """Return a mock engine whose analyse() yields scores in sequence."""
+    mock_engine = MagicMock()
+    # analyse returns a list of one info dict (multipv=3 path but we wrap in list)
+    mock_engine.analyse.side_effect = [
+        [_make_score_mock(v)] for v in call_count_scores
+    ]
+    mock_engine.__enter__ = lambda s: s
+    mock_engine.__exit__ = MagicMock(return_value=False)
+    return mock_engine
+
+
+def test_analyze_game_detail_populates_fen():
+    """Task 1.4: analyze_game_detail must set non-empty .fen on MoveError entries."""
+    # Use the fixture PGN that has [%clk] annotations — player is white.
+    game = Game(
+        id="clk_test",
+        username="testplayer",
+        played_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        time_class="rapid",
+        color="white",
+        result="loss",
+        end_reason="resigned",
+        opponent="opponent",
+        player_rating=1500,
+        opponent_rating=1520,
+        opening_eco="C60",
+        opening_name="Ruy Lopez",
+        move_count=30,
+        pgn=CLK_PGN,
+    )
+
+    # The PGN has 30 moves (60 plies). We need one white move to have cpl >= 50.
+    # Scores alternate: before each move analyse is called once (initial) + once per ply.
+    # We simply set score=100 for the "before" of white's first move and 30 "after".
+    # To keep the mock simple: return 100 for the initial call, then alternate 30/100.
+    num_plies = 60  # 30 full moves
+    # initial call + one call per ply = 1 + 60 = 61 calls
+    scores = [100] + [30, 100] * (num_plies // 2)  # alternates per ply
+
+    mock_engine = _build_engine_mock(scores)
+
+    with patch("chesslens.core.analyzer._find_stockfish", return_value="/sf"):
+        with patch("chess.engine.SimpleEngine.popen_uci", return_value=mock_engine):
+            result = analyze_game_detail(game)
+
+    assert result is not None
+    assert len(result.top_errors) > 0
+    error = result.top_errors[0]
+    assert isinstance(error.fen, str)
+    assert len(error.fen) > 0
+
+
+def test_move_error_fen_is_position_before_error():
+    """Task 1.6: MoveError.fen must equal the board state BEFORE the bad move."""
+    start_fen = chess.STARTING_FEN
+    board = chess.Board(start_fen)
+    # Apply e4 — the fen before e4 is start_fen
+    move = chess.Move.from_uci("e2e4")
+    fen_before = board.fen()
+    board.push(move)
+    fen_after = board.fen()
+
+    # MoveError.fen must equal fen_before, not fen_after
+    error = MoveError(
+        ply=1,
+        san="e4",
+        eval_before=100,
+        eval_after=30,
+        centipawn_loss=70,
+        best_line=[],
+        severity="inaccuracy",
+        fen=fen_before,
+    )
+
+    assert error.fen == fen_before
+    assert error.fen != fen_after
 
 
 # --- Integration tests (require Stockfish) ---
