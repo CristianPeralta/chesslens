@@ -201,9 +201,12 @@ class TestDecodeToken:
         from chesslens.delivery.security import decode_token
 
         token = _make_token("testsecret", "access")
-        # Corrupt the last character of the signature (third segment)
+        # WHY first char, not last: the last base64url char of a 32-byte HMAC encodes
+        # only 4 HMAC bits + 2 padding bits. PyJWT ignores the padding bits, so changing
+        # only them leaves the decoded signature unchanged. The first char always encodes
+        # 6 full HMAC bits — changing it guarantees an actual signature mismatch.
         parts = token.split(".")
-        parts[2] = parts[2][:-1] + ("A" if parts[2][-1] != "A" else "B")
+        parts[2] = ("B" if parts[2][0] != "B" else "C") + parts[2][1:]
         tampered = ".".join(parts)
 
         with pytest.raises(jwt.exceptions.InvalidTokenError):
@@ -309,7 +312,8 @@ class TestGetCurrentUser:
         app, user = test_app
         good_token = _make_token("testsecret", "access")
         parts = good_token.split(".")
-        parts[2] = parts[2][:-1] + ("A" if parts[2][-1] != "A" else "B")
+        # WHY first char: see test_decode_token_tampered_raises for the base64url padding explanation.
+        parts[2] = ("B" if parts[2][0] != "B" else "C") + parts[2][1:]
         tampered = ".".join(parts)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/protected", headers={"Authorization": f"Bearer {tampered}"})
