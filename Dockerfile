@@ -17,8 +17,10 @@ RUN uv sync --frozen --no-install-project
 # Copy source and install project
 COPY src/ ./src/
 COPY README.md ./
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
 RUN uv sync --frozen
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-ENTRYPOINT ["chesslens"]
+EXPOSE 8000
