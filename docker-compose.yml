@@ -26,7 +26,6 @@ services:
         required: false
     environment:
       CHESSLENS_DATABASE_URL: postgresql+psycopg://chesslens:chesslens@postgres:5432/chesslens
-      CHESSLENS_JWT_SECRET: ${CHESSLENS_JWT_SECRET:?set CHESSLENS_JWT_SECRET in .env}
       CHESSLENS_MODEL: ${CHESSLENS_MODEL:-gemini/gemini-2.5-pro}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     expose:
