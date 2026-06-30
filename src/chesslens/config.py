@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 7
+    lichess_token: str = ""
 
     @property
     def db_url(self) -> str:

@@ -19,13 +19,15 @@ from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+import httpx
+from chesslens.config import settings
 from chesslens.core.analyzer import GameAnalysis, analyze_game, analyze_game_detail
-from chesslens.core.fetcher import UserNotFoundError, get_games
+from chesslens.core.fetcher import UserNotFoundError, get_games, get_recent_games
 from chesslens.core.jobs import generate_report_for_user
 from chesslens.core.openings import extract_opening_breakdown
 from chesslens.core.parser import Game as DomainGame
@@ -35,8 +37,6 @@ from chesslens.core.renderer import render_game, render_opening, render_report
 from chesslens.core.reporter import generate_narrative
 from chesslens.db.models import AnalysisRow, GameRow, ReportRow, UserRow
 from chesslens.db.session import get_session, init_db
-from chesslens.delivery.auth import router as auth_router
-from chesslens.delivery.security import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,6 @@ async def lifespan(app: FastAPI):
 # --- app ---
 
 app = FastAPI(title="chesslens", lifespan=lifespan)
-app.include_router(auth_router)
 
 
 # --- global error handler ---
@@ -162,7 +161,58 @@ def _row_to_domain(row: GameRow) -> DomainGame:
 # Routes
 # ===================================================================
 
-# 4.1 — Health
+# 4.0 — Landing
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Landing page — username entry form."""
+    template = _env.get_template("landing.html")
+    return HTMLResponse(template.render())
+
+
+# 4.1 — Lichess redirect
+@app.get("/game/{game_id}/lichess")
+def lichess_redirect(game_id: str, ply: int = Query(0)):
+    """Import a game PGN to Lichess and redirect to the analysis board at the given ply."""
+    with get_session() as session:
+        row = session.execute(select(GameRow).where(GameRow.id == game_id)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    # Strip chess.com proprietary tags — Lichess only needs standard PGN
+    import re as _re
+    _KNOWN_TAGS = {"Event","Site","Date","Round","White","Black","Result","WhiteElo","BlackElo","ECO","Opening","TimeControl","Termination","UTCDate","UTCTime"}
+    clean_pgn = _re.sub(
+        r'\[(\w+)\s+"[^"]*"\]\s*\n?',
+        lambda m: m.group(0) if m.group(1) in _KNOWN_TAGS else "",
+        row.pgn,
+    )
+    headers = {"Authorization": f"Bearer {settings.lichess_token}"} if settings.lichess_token else {}
+    import subprocess as _sp, tempfile as _tf, os as _os
+    with _tf.NamedTemporaryFile(mode='w', suffix='.pgn', delete=False) as f:
+        f.write(clean_pgn)
+        pgn_path = f.name
+    try:
+        curl_args = ["curl", "-s", "-w", "\n%{http_code} %{redirect_url}",
+                     "-X", "POST", "--data-urlencode", f"pgn@{pgn_path}",
+                     "https://lichess.org/api/import"]
+        result = _sp.run(curl_args, capture_output=True, text=True, timeout=15)
+    finally:
+        _os.unlink(pgn_path)
+    last_line = result.stdout.strip().split('\n')[-1]
+    parts = last_line.split(' ', 1)
+    http_code = parts[0] if parts else ''
+    location = parts[1].strip() if len(parts) > 1 else ''
+    if location:
+        lichess_url = location if location.startswith("http") else f"https://lichess.org{location}"
+        return RedirectResponse(f"{lichess_url}/{row.color}#{ply}", status_code=302)
+    chessdotcom_url = (
+        f"https://www.chess.com/game/daily/{row.id}"
+        if row.time_class == "daily"
+        else f"https://www.chess.com/game/live/{row.id}"
+    )
+    return RedirectResponse(chessdotcom_url, status_code=302)
+
+
+# 4.2 — Health
 @app.get("/health")
 def health():
     """Liveness probe — always returns 200 + {"status": "ok"}."""
@@ -171,9 +221,11 @@ def health():
 
 # 4.2 — Stats
 @app.get("/stats", response_class=HTMLResponse)
-def stats(current_user: UserRow = Depends(get_current_user)):
+def stats(request: Request):
     """Quick stats page — last 30 days from DB for the authenticated user."""
-    username = current_user.chess_username
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
@@ -241,12 +293,11 @@ def stats(current_user: UserRow = Depends(get_current_user)):
 
 # 4.3 — Report
 @app.get("/report", response_class=HTMLResponse)
-def report(
-    month: str | None = Query(None),
-    current_user: UserRow = Depends(get_current_user),
-):
+def report(request: Request, month: str | None = Query(None)):
     """Monthly Wrapped report. Checks DB cache before generating."""
-    username = current_user.chess_username
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
     if month is None:
         month = datetime.now(timezone.utc).strftime("%Y-%m")
 
@@ -290,11 +341,93 @@ def report(
     return HTMLResponse(row.html)
 
 
-# 4.4 — Game last  (MUST be declared BEFORE /game/{game_id})
+# 4.4 — Games list
+@app.get("/games", response_class=HTMLResponse)
+def games_list(request: Request, page: int = Query(1, ge=1)):
+    """Paginated list of all games for the authenticated user (10 per page)."""
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
+
+    with get_session() as session:
+        total = session.execute(
+            select(func.count()).select_from(GameRow).where(GameRow.username == username)
+        ).scalar_one()
+
+    if total == 0:
+        # Auto-fetch from chess.com on first visit
+        try:
+            raw_games = run_async(get_recent_games(username, months=1))
+        except UserNotFoundError:
+            raise HTTPException(status_code=404, detail=f"chess.com user '{username}' not found")
+
+        if raw_games:
+            games = parse_games(raw_games, username)
+            with get_session() as session:
+                existing_ids = set(
+                    r[0] for r in session.execute(
+                        select(GameRow.id).where(GameRow.id.in_([g.id for g in games]))
+                    ).all()
+                )
+                for g in games:
+                    if g.id not in existing_ids:
+                        session.add(GameRow(
+                            id=g.id, username=g.username, played_at=g.played_at,
+                            time_class=g.time_class, color=g.color, result=g.result,
+                            end_reason=g.end_reason, opponent=g.opponent,
+                            player_rating=g.player_rating, opponent_rating=g.opponent_rating,
+                            opening_eco=g.opening_eco, opening_name=g.opening_name,
+                            move_count=g.move_count, pgn=g.pgn,
+                        ))
+            with get_session() as session:
+                total = session.execute(
+                    select(func.count()).select_from(GameRow).where(GameRow.username == username)
+                ).scalar_one()
+
+    per_page = 10
+    offset = (page - 1) * per_page
+    total_pages = max(1, -(-total // per_page))  # ceiling division
+
+    with get_session() as session:
+        rows = session.execute(
+            select(GameRow)
+            .where(GameRow.username == username)
+            .order_by(GameRow.played_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        ).scalars().all()
+        games_data = [
+            {
+                "id": r.id,
+                "played_at": r.played_at.strftime("%Y-%m-%d %H:%M"),
+                "color": r.color,
+                "result": r.result,
+                "opponent": r.opponent,
+                "opponent_rating": r.opponent_rating,
+                "player_rating": r.player_rating,
+                "opening_name": r.opening_name or "—",
+                "move_count": r.move_count,
+            }
+            for r in rows
+        ]
+
+    html = _env.get_template("games.html").render(
+        username=username,
+        games=games_data,
+        page=page,
+        total_pages=total_pages,
+        total=total,
+    )
+    return HTMLResponse(html)
+
+
+# 4.5 — Game last  (MUST be declared BEFORE /game/{game_id})
 @app.get("/game/last", response_class=HTMLResponse)
-def game_last(current_user: UserRow = Depends(get_current_user)):
+def game_last(request: Request):
     """Return the most recently played game for the authenticated user."""
-    username = current_user.chess_username
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
     with get_session() as session:
         game_row = session.execute(
             select(GameRow)
@@ -304,7 +437,7 @@ def game_last(current_user: UserRow = Depends(get_current_user)):
         ).scalar_one_or_none()
 
     if game_row is None:
-        raise HTTPException(status_code=404, detail=f"No games found for user '{username}'")
+        raise HTTPException(status_code=404, detail=f"No games found for '{username}' — visit /games first")
 
     domain_game = _row_to_domain(game_row)
     detail = analyze_game_detail(domain_game)
@@ -317,19 +450,18 @@ def game_last(current_user: UserRow = Depends(get_current_user)):
 
 # 4.5 — Game by ID  (MUST be declared AFTER /game/last)
 @app.get("/game/{game_id}", response_class=HTMLResponse)
-def game_by_id(game_id: str, current_user: UserRow = Depends(get_current_user)):
-    """Return the analysis for a specific game by its chess.com ID.
+def game_by_id(game_id: str, request: Request):
+    """Return the analysis for a specific game by its chess.com ID."""
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
 
-    WHY 404 not 403: returning 404 avoids leaking that a game exists for
-    another user. The caller should not know whether the game id is valid
-    or simply inaccessible.
-    """
     with get_session() as session:
         game_row = session.execute(
             select(GameRow).where(GameRow.id == game_id)
         ).scalar_one_or_none()
 
-    if game_row is None or game_row.username != current_user.chess_username:
+    if game_row is None:
         raise HTTPException(status_code=404, detail=f"Game '{game_id}' not found")
 
     domain_game = _row_to_domain(game_row)
@@ -343,9 +475,11 @@ def game_by_id(game_id: str, current_user: UserRow = Depends(get_current_user)):
 
 # 4.6 — Opening breakdown
 @app.get("/opening/{name}", response_class=HTMLResponse)
-def opening(name: str, current_user: UserRow = Depends(get_current_user)):
+def opening(name: str, request: Request):
     """Return an opening breakdown for the authenticated user."""
-    username = current_user.chess_username
+    username = request.cookies.get("chess_username")
+    if not username:
+        return RedirectResponse("/", status_code=302)
     with get_session() as session:
         rows = session.execute(
             select(GameRow).where(GameRow.username == username)

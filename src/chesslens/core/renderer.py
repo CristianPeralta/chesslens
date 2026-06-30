@@ -64,7 +64,12 @@ def render_game(detail: GameDetailAnalysis, game: Game) -> str:
         reverse=True,
     )
     replay_json = json.dumps(
-        {"pgn": game.pgn, "player_color": game.color, "errors": replay_errors}
+        {"game_id": game.id, "pgn": game.pgn, "player_color": game.color, "errors": replay_errors}
+    )
+    chessdotcom_url = (
+        f"https://www.chess.com/game/daily/{game.id}"
+        if game.time_class == "daily"
+        else f"https://www.chess.com/game/live/{game.id}"
     )
 
     return template.render(
@@ -76,6 +81,7 @@ def render_game(detail: GameDetailAnalysis, game: Game) -> str:
         replay_json=replay_json,
         replay_errors=replay_errors,
         replay_pgn=game.pgn,
+        chessdotcom_url=chessdotcom_url,
     )
 
 

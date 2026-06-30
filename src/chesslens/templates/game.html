@@ -190,6 +190,18 @@
   </div>
 </div>
 
+<!-- External links -->
+<div style="display:flex; gap:1rem; margin-bottom:1.5rem;">
+  <a id="lichess-link" href="#" target="_blank" rel="noopener"
+     style="font-size:0.9rem; color:#9ca3af; text-decoration:none;">
+    Explore on Lichess ↗
+  </a>
+  <a href="{{ chessdotcom_url }}" target="_blank" rel="noopener"
+     style="font-size:0.9rem; color:#9ca3af; text-decoration:none;">
+    View on chess.com ↗
+  </a>
+</div>
+
 <!-- Clock card -->
 {% if detail.remaining_clock %}
 <div class="card">
@@ -407,6 +419,10 @@ function loadError(i) {
   // Nav buttons
   document.getElementById("btn-prev").disabled = (i === 0);
   document.getElementById("btn-next").disabled = (i === errors.length - 1);
+
+  // Lichess link — jump to this ply
+  const lichessLink = document.getElementById("lichess-link");
+  if (lichessLink) lichessLink.href = `/game/${replayData.game_id}/lichess?ply=${error.ply}`;
 }
 
 // ── Move input handler ───────────────────────────────────────────────────────

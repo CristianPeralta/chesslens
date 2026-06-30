@@ -1,6 +1,7 @@
 """Tests for POST /auth/refresh (Task 4.3).
 
 Strict TDD: written BEFORE implementation exists.
+NOTE: /auth/* routes removed — JWT auth replaced by cookie-based username.
 """
 from __future__ import annotations
 
@@ -8,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import pytest
+
+pytestmark = pytest.mark.skip(reason="JWT auth routes removed — replaced by cookie-based auth")
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
