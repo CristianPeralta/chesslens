@@ -21,6 +21,8 @@ COPY alembic.ini ./
 COPY migrations/ ./migrations/
 RUN uv sync --frozen
 
-ENV PATH="/app/.venv/bin:$PATH"
+# Debian's stockfish package installs to /usr/games, which isn't on
+# the default non-login PATH inside containers.
+ENV PATH="/app/.venv/bin:/usr/games:$PATH"
 
 EXPOSE 8000
