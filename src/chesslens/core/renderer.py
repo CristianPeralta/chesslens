@@ -50,10 +50,12 @@ def render_game(detail: GameDetailAnalysis, game: Game) -> str:
     replay_errors = sorted(
         [
             {
+                "ply": e.ply,
                 "fen": e.fen,
                 "san": e.san,
                 "centipawn_loss": e.centipawn_loss,
                 "severity": e.severity,
+                "best_line": e.best_line,
                 "remaining_clock_at_ply": e.remaining_clock_at_ply,
             }
             for e in detail.top_errors
