@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}chesslens{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='43' stroke='%2381b64c' stroke-width='8' fill='none'/><text x='50' y='70' font-size='52' text-anchor='middle' fill='%2381b64c'>♟</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,12 +63,42 @@
     .stat-row:last-child { border-bottom: none; }
     .stat-label { color: #a0a0a0; font-size: 0.9rem; }
     .stat-value { font-weight: 600; }
+
+    .site-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+    .site-header a { color: #81b64c; text-decoration: none; font-weight: 700; font-size: 1.1rem; }
+    .switch-user {
+      background: none;
+      border: 1px solid #333;
+      color: #888;
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .switch-user:hover { color: #f0f0f0; border-color: #555; }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
   <div class="container">
+    <header class="site-header">
+      <a href="/">chesslens</a>
+      <button class="switch-user" onclick="switchUser()">Switch user</button>
+    </header>
     {% block content %}{% endblock %}
   </div>
+  <script>
+    function switchUser() {
+      localStorage.removeItem('chess_username');
+      document.cookie = 'chess_username=; path=/; max-age=0';
+      location.href = '/';
+    }
+  </script>
 </body>
 </html>

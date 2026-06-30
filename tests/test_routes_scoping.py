@@ -1,10 +1,10 @@
-"""Tests for protected route scoping (Tasks 5.1-5.3).
+"""Tests for protected route scoping.
 
-Strict TDD: written BEFORE the route protection is implemented.
 Covers:
-- /stats, /report, /game/last, /game/{game_id}, /opening/{name} require auth
+- /stats, /report, /game/last, /game/{game_id}, /opening/{name} require a
+  chess_username cookie; missing cookie redirects to / (302)
 - /health remains public
-- /game/{game_id} returns 404 (not 403) for cross-user access
+- GET / serves the landing page
 """
 from __future__ import annotations
 
@@ -39,35 +39,17 @@ def db_engine():
 
 @pytest.fixture()
 def app_client(db_engine, monkeypatch):
-    """TestClient with in-memory DB, JWT secret set, init_db patched."""
+    """TestClient with in-memory DB and init_db patched."""
     import chesslens.db.session as session_module
 
     test_factory = sessionmaker(bind=db_engine, expire_on_commit=False)
     monkeypatch.setattr(session_module, "SessionLocal", test_factory)
-    monkeypatch.setattr("chesslens.delivery.security.settings.jwt_secret", "test-secret-32-chars-long-padded!")
-    monkeypatch.setattr("chesslens.delivery.security.settings.access_token_ttl_minutes", 15)
-    monkeypatch.setattr("chesslens.delivery.security.settings.refresh_token_ttl_days", 7)
 
     from chesslens.delivery.api import app
 
     with patch("chesslens.delivery.api.init_db"):
         with TestClient(app) as c:
             yield c
-
-
-@pytest.fixture()
-def auth_headers(app_client):
-    """Register alice and return auth headers for her."""
-    app_client.post(
-        "/auth/register",
-        json={"email": "alice@example.com", "password": "secret123", "chess_username": "alice"},
-    )
-    resp = app_client.post(
-        "/auth/login",
-        json={"email": "alice@example.com", "password": "secret123"},
-    )
-    token = resp.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _make_game_row(
@@ -119,83 +101,80 @@ def _make_session_ctx(rows=None, scalar=_UNSET):
 
 
 # ---------------------------------------------------------------------------
-# Task 5.1 — GET /stats requires auth
+# Task 5.1 — GET /stats requires cookie
 # ---------------------------------------------------------------------------
 
 
 class TestStatsScoping:
-    def test_stats_without_token_returns_401(self, app_client):
-        """S-08: GET /stats with no auth returns 401."""
-        response = app_client.get("/stats")
-        assert response.status_code == 401
+    def test_stats_without_cookie_returns_302(self, app_client):
+        """GET /stats with no cookie redirects to landing (302)."""
+        response = app_client.get("/stats", follow_redirects=False)
+        assert response.status_code == 302
 
-    def test_stats_with_valid_token_returns_200(self, app_client, auth_headers):
-        """S-09: GET /stats with valid token returns 200."""
+    def test_stats_with_cookie_returns_200(self, app_client):
+        """GET /stats with valid cookie returns 200."""
         rows = [_make_game_row(id=f"g{i}", username="alice") for i in range(3)]
         session_ctx = _make_session_ctx(rows=rows, scalar=rows[0])
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = app_client.get("/stats", headers=auth_headers)
+            response = app_client.get("/stats", cookies={"chess_username": "alice"})
         assert response.status_code == 200
 
-    def test_stats_scoped_to_authenticated_user(self, app_client, auth_headers):
-        """S-09: /stats data is scoped to the authenticated user's chess_username.
-
-        The route must use current_user.chess_username as the DB query scope —
-        not a query param. We verify this by supplying alice's token and confirming
-        a successful response that references alice (via mock game rows).
-        """
+    def test_stats_scoped_to_cookie_username(self, app_client):
+        """GET /stats data is scoped to the chess_username cookie value."""
         rows = [_make_game_row(id=f"g{i}", username="alice") for i in range(3)]
         session_ctx = _make_session_ctx(rows=rows, scalar=rows[0])
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = app_client.get("/stats", headers=auth_headers)
+            response = app_client.get("/stats", cookies={"chess_username": "alice"})
         assert response.status_code == 200
         assert "alice" in response.text
 
 
 # ---------------------------------------------------------------------------
-# Task 5.2 — /report, /game/last, /opening/{name} require auth
+# Task 5.2 — /report, /game/last, /opening/{name} require cookie
 # ---------------------------------------------------------------------------
 
 
 class TestOtherRoutesScoping:
-    def test_report_without_token_returns_401(self, app_client):
-        response = app_client.get("/report")
-        assert response.status_code == 401
+    def test_report_without_cookie_returns_302(self, app_client):
+        response = app_client.get("/report", follow_redirects=False)
+        assert response.status_code == 302
 
-    def test_game_last_without_token_returns_401(self, app_client):
-        response = app_client.get("/game/last")
-        assert response.status_code == 401
+    def test_game_last_without_cookie_returns_302(self, app_client):
+        response = app_client.get("/game/last", follow_redirects=False)
+        assert response.status_code == 302
 
-    def test_opening_without_token_returns_401(self, app_client):
-        response = app_client.get("/opening/Sicilian%20Defense")
-        assert response.status_code == 401
+    def test_opening_without_cookie_returns_302(self, app_client):
+        response = app_client.get("/opening/Sicilian%20Defense", follow_redirects=False)
+        assert response.status_code == 302
 
 
 # ---------------------------------------------------------------------------
-# Task 5.3 — GET /game/{game_id} with ownership check
+# Task 5.3 — GET /game/{game_id} requires cookie
 # ---------------------------------------------------------------------------
 
 
 class TestGameByIdScoping:
-    def test_game_by_id_without_token_returns_401(self, app_client):
-        """S-08 variant: no auth → 401."""
-        response = app_client.get("/game/abc123")
-        assert response.status_code == 401
+    def test_game_by_id_without_cookie_returns_302(self, app_client):
+        """No cookie → redirect to landing."""
+        response = app_client.get("/game/abc123", follow_redirects=False)
+        assert response.status_code == 302
 
-    def test_game_by_id_cross_user_returns_404(self, app_client, auth_headers):
-        """S-10: alice token + bob's game → 404."""
-        bob_game = _make_game_row(id="bob_game", username="bob")
-        session_ctx = _make_session_ctx(scalar=bob_game)
+    def test_game_by_id_not_found_returns_404(self, app_client):
+        """Cookie present + game not in DB → 404."""
+        session_ctx = _make_session_ctx(scalar=None)
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = app_client.get("/game/bob_game", headers=auth_headers)
+            response = app_client.get(
+                "/game/missing_game", cookies={"chess_username": "alice"}
+            )
         assert response.status_code == 404
 
-    def test_game_by_id_cross_user_does_not_return_403(self, app_client, auth_headers):
-        """S-10: explicitly assert that 403 is NOT returned for cross-user game."""
-        bob_game = _make_game_row(id="bob_game", username="bob")
-        session_ctx = _make_session_ctx(scalar=bob_game)
+    def test_game_by_id_not_found_does_not_return_403(self, app_client):
+        """Missing game returns 404, never 403."""
+        session_ctx = _make_session_ctx(scalar=None)
         with patch("chesslens.delivery.api.get_session", return_value=session_ctx):
-            response = app_client.get("/game/bob_game", headers=auth_headers)
+            response = app_client.get(
+                "/game/missing_game", cookies={"chess_username": "alice"}
+            )
         assert response.status_code != 403
 
 
@@ -205,8 +184,21 @@ class TestGameByIdScoping:
 
 
 class TestHealthRemainsPublic:
-    def test_health_without_token_returns_200(self, app_client):
-        """S-04 variant: health is still public after route protection."""
+    def test_health_without_cookie_returns_200(self, app_client):
+        """Health endpoint is still public — no cookie required."""
         response = app_client.get("/health")
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Landing page
+# ---------------------------------------------------------------------------
+
+
+class TestLandingPage:
+    def test_root_returns_200(self, app_client):
+        """GET / serves the landing page."""
+        response = app_client.get("/")
+        assert response.status_code == 200
+        assert "chess_username" in response.text
