@@ -17,10 +17,9 @@ services:
   chesslens:
     build: .
     image: chesslens
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn chesslens.delivery.api:app
-             --host 0.0.0.0 --port 8000 --workers 1"
+    # init_db() in the lifespan already runs alembic upgrade head on startup —
+    # running it again here via CLI deadlocks the second invocation.
+    command: uvicorn chesslens.delivery.api:app --host 0.0.0.0 --port 8000 --workers 1
     env_file:
       - path: .env
         required: false
