@@ -70,6 +70,26 @@
     }
 
     button:hover { background: #6fa03d; }
+
+    .hint {
+      font-size: 0.8rem;
+      color: #666;
+      margin-top: -0.4rem;
+      margin-bottom: 0.75rem;
+      text-align: left;
+    }
+
+    .error-msg {
+      background: #2d1010;
+      border: 1px solid #7f1d1d;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      margin-bottom: 0.75rem;
+      text-align: left;
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -77,15 +97,26 @@
     <div class="logo">chess<span>lens</span></div>
     <p class="tagline">Your personal chess coach, powered by Stockfish</p>
     <form id="f">
+      <div id="err" class="error-msg"></div>
       <input id="u" type="text" placeholder="your chess.com username" required autofocus>
+      <p class="hint">Enter your chess.com username, not your email.</p>
       <button type="submit">Analyze my games →</button>
     </form>
   </div>
   <script>
-    const stored = localStorage.getItem('chess_username');
-    if (stored) {
-      document.cookie = 'chess_username=' + stored + '; path=/';
-      location.href = '/games';
+    const params = new URLSearchParams(location.search);
+    if (params.get('error') === 'not_found') {
+      const errEl = document.getElementById('err');
+      const bad = params.get('username') || 'that username';
+      errEl.textContent = `"${bad}" was not found on chess.com. Check the spelling and try again.`;
+      errEl.style.display = 'block';
+      localStorage.removeItem('chess_username');
+    } else {
+      const stored = localStorage.getItem('chess_username');
+      if (stored) {
+        document.cookie = 'chess_username=' + stored + '; path=/';
+        location.href = '/games';
+      }
     }
     document.getElementById('f').onsubmit = function(e) {
       e.preventDefault();

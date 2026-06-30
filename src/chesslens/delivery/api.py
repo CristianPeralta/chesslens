@@ -359,7 +359,9 @@ def games_list(request: Request, page: int = Query(1, ge=1)):
         try:
             raw_games = run_async(get_recent_games(username, months=1))
         except UserNotFoundError:
-            raise HTTPException(status_code=404, detail=f"chess.com user '{username}' not found")
+            response = RedirectResponse(f"/?error=not_found&username={username}", status_code=302)
+            response.delete_cookie("chess_username")
+            return response
 
         if raw_games:
             games = parse_games(raw_games, username)
