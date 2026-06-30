@@ -1,8 +1,10 @@
 FROM python:3.11-slim-bookworm
 
-# Install Stockfish — the only system dependency
+# Install Stockfish + curl (Lichess import shells out to curl — LiteLLM
+# monkey-patches httpx/requests in-process, breaking redirect handling)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     stockfish \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
